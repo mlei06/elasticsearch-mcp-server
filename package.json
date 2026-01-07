@@ -1,6 +1,6 @@
 {
   "name": "elasticsearch-mcp-vsee",
-  "version": "0.5.9",
+  "version": "0.5.12",
   "description": "Secure MCP server for Elasticsearch integration with comprehensive tools and Elastic Cloud support (fork with improved health check, get_index_fields tool, enhanced query flexibility, and consolidated analytics tools)",
   "main": "build/index.js",
   "bin": {

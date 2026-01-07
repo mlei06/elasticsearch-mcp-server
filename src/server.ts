@@ -68,7 +68,7 @@ export class ElasticMCPServer {
   private setupHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       this.logger.debug('Received list tools request');
-      
+
       return {
         tools: [
           {
@@ -125,11 +125,11 @@ export class ElasticMCPServer {
                 },
                 startDate: {
                   type: 'string',
-                  description: 'Start date for current period in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d"',
+                  description: 'Start date for current period in date math (e.g., "now-30d", "now-1y") or ISO format (YYYY-MM-DD). Defaults to "now-30d"',
                 },
                 endDate: {
                   type: 'string',
-                  description: 'End date for current period in ISO format (YYYY-MM-DD) or date math (e.g., "now"). Defaults to "now"',
+                  description: 'End date for current period in date math (e.g., "now") or ISO format (YYYY-MM-DD). Defaults to "now"',
                 },
                 subscription: {
                   type: 'string',
@@ -418,7 +418,7 @@ export class ElasticMCPServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
-      
+
       this.logger.info('Tool call received', {
         toolName: name,
         hasArgs: !!args,
@@ -429,7 +429,7 @@ export class ElasticMCPServer {
         // Connection checks often fail with limited permissions unnecessarily
 
         let result: unknown;
-        
+
         switch (name) {
           case 'get_index_fields':
             result = await this.getIndexFieldsTool.execute(args);

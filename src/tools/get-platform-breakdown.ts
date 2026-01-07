@@ -2,7 +2,7 @@ import { ElasticsearchManager } from '../elasticsearch/client.js';
 import { Logger } from '../logger.js';
 import { z } from 'zod';
 import { ValidationError, ElasticsearchError } from '../errors/handlers.js';
-import { capTimePeriod } from '../utils/date-math.js';
+//import { capTimePeriod } from '../utils/date-math.js';
 import { AGGREGATION_LIMITS, calculateTermsSize } from '../utils/aggregation-limits.js';
 import { FIELD_CONSTANTS } from '../utils/field-constants.js';
 
@@ -62,21 +62,21 @@ export class GetPlatformBreakdownTool {
     try {
       const validatedArgs = GetPlatformBreakdownArgsSchema.parse(args);
       const topN = Math.min(validatedArgs.topN || 10, 50);
-      
+
       let startDate = validatedArgs.startDate || 'now-14d';
       let endDate = validatedArgs.endDate || 'now';
-      
+
       // Platform breakdowns use terms aggregation on high-cardinality fields (especially patient platforms).
       // Cap time period to prevent data limit errors.
-      const { startDate: adjustedStartDate, endDate: adjustedEndDate } = capTimePeriod(
-        startDate,
-        endDate,
-        30, // Max 30 days for platform breakdowns
-        this.logger
-      );
-      startDate = adjustedStartDate;
-      endDate = adjustedEndDate;
-      
+      //const { startDate: adjustedStartDate, endDate: adjustedEndDate } = capTimePeriod(
+      //  startDate,
+      //  endDate,
+      //  30, // Max 30 days for platform breakdowns
+      //  this.logger
+      //);
+      //startDate = adjustedStartDate;
+      //endDate = adjustedEndDate;
+
       this.logger.info('Getting platform breakdown', {
         role: validatedArgs.role,
         breakdownType: validatedArgs.breakdownType,
@@ -105,7 +105,7 @@ export class GetPlatformBreakdownTool {
 
       let aggregationField: string;
       if (validatedArgs.role === 'provider') {
-        aggregationField = validatedArgs.breakdownType === 'version' 
+        aggregationField = validatedArgs.breakdownType === 'version'
           ? 'provider0_platform_version.keyword'
           : 'provider0_platform.keyword';
       } else {
@@ -352,12 +352,12 @@ export class GetPlatformBreakdownTool {
       }
 
       this.logger.error('Failed to get platform breakdown', {}, error as Error);
-      
+
       // Check if this is a ResponseError from Elasticsearch client
       if (error && typeof error === 'object' && 'body' in error) {
         throw ElasticsearchError.fromResponseError(error, 'get_platform_breakdown', args);
       }
-      
+
       throw new ElasticsearchError(
         'Failed to get platform breakdown from Elasticsearch',
         error as Error,

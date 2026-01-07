@@ -3,7 +3,7 @@ import { Logger } from '../logger.js';
 import { z } from 'zod';
 import { ValidationError, ElasticsearchError } from '../errors/handlers.js';
 import { FIELD_CONSTANTS } from '../utils/field-constants.js';
-import { parseDateMath, capTimePeriod } from '../utils/date-math.js';
+import { resolveDate } from '../utils/date-math.js';
 
 const TopChangeArgsSchema = z.object({
   groupBy: z.enum(['account', 'group']).describe('Group by: "account" to find top accounts by visit change, "group" to find top groups by visit change'),
@@ -57,71 +57,58 @@ export class TopChangeTool {
       const topN = validatedArgs.topN || 5;
       let currentPeriodStart = validatedArgs.startDate || 'now-30d';
       let currentPeriodEnd = validatedArgs.endDate || 'now';
-      
+
       // This tool aggregates ALL accounts/groups before sorting, making it memory-intensive.
       // Cap the current period to prevent data limit errors.
-      const { startDate: cappedCurrentStart, endDate: cappedCurrentEnd } = capTimePeriod(
-        currentPeriodStart,
-        currentPeriodEnd,
-        60, // Max 60 days per period
-        this.logger
-      );
-      currentPeriodStart = cappedCurrentStart;
-      currentPeriodEnd = cappedCurrentEnd;
-      
-      // Calculate the duration of the current period
-      const startDays = parseDateMath(currentPeriodStart);
-      const endDays = parseDateMath(currentPeriodEnd);
-      const periodDuration = Math.abs(endDays - startDays);
-      
-      // Calculate previous period: same duration, ending where current period starts
-      // Previous period end = current period start
-      const previousPeriodEnd = currentPeriodStart;
-      
-      // Previous period start = current period start minus the duration
-      // For date math expressions, we need to calculate the new start date
-      let previousPeriodStart: string;
-      if (currentPeriodStart.startsWith('now-')) {
-        // Extract the number and unit from the date math expression
-        const match = currentPeriodStart.match(/now-(\d+)([dwMy])/);
-        if (match) {
-          const currentValue = parseInt(match[1], 10);
-          const unit = match[2];
-          const newValue = currentValue + periodDuration;
-          previousPeriodStart = `now-${newValue}${unit}`;
-        } else {
-          // Fallback: use days
-          const newValue = startDays + periodDuration;
-          previousPeriodStart = `now-${newValue}d`;
-        }
-      } else {
-        // For ISO dates, we'd need a date library to properly subtract days
-        // For now, use date math as fallback
-        const newValue = startDays + periodDuration;
-        previousPeriodStart = `now-${newValue}d`;
-      }
-      
+      //const { startDate: cappedCurrentStart, endDate: cappedCurrentEnd } = capTimePeriod(
+      //  currentPeriodStart,
+      //  currentPeriodEnd,
+      //  60, // Max 60 days per period
+      //  this.logger
+      //);
+      //currentPeriodStart = cappedCurrentStart;
+      //currentPeriodEnd = cappedCurrentEnd;
+
+      // Calculate absolute dates for the current period
+      const currentStart = resolveDate(currentPeriodStart);
+      const currentEnd = resolveDate(currentPeriodEnd);
+
+      // Calculate duration in milliseconds
+      const durationMs = currentEnd.getTime() - currentStart.getTime();
+
+      // Calculate previous period: strictly distinct, immediately preceding current period
+      // Previous End = Current Start
+      const previousEnd = new Date(currentStart.getTime());
+      // Previous Start = Previous End - Duration
+      const previousStart = new Date(previousEnd.getTime() - durationMs);
+
+      // Format as ISO strings for Elasticsearch
+      const currentPeriodStartIso = currentStart.toISOString();
+      const currentPeriodEndIso = currentEnd.toISOString();
+      const previousPeriodStartIso = previousStart.toISOString();
+      const previousPeriodEndIso = previousEnd.toISOString();
+
       this.logger.info('Getting top items by visit change', {
         groupBy: validatedArgs.groupBy,
         direction: validatedArgs.direction,
         topN,
-        currentPeriodStart,
-        currentPeriodEnd,
-        previousPeriodStart,
-        previousPeriodEnd,
-        periodDuration,
+        currentPeriodStart: currentPeriodStartIso,
+        currentPeriodEnd: currentPeriodEndIso,
+        previousPeriodStart: previousPeriodStartIso,
+        previousPeriodEnd: previousPeriodEndIso,
+        durationMs,
         subscription: validatedArgs.subscription,
       });
 
       const client = this.elasticsearch.getClient();
 
       const index = FIELD_CONSTANTS.index;
-      const timeField = FIELD_CONSTANTS.timeField; 
+      const timeField = FIELD_CONSTANTS.timeField;
       const testVisitField = FIELD_CONSTANTS.testVisitField;
       const subscriptionField = FIELD_CONSTANTS.subscriptionField;
-      
-      const groupingField = validatedArgs.groupBy === 'account' 
-        ? FIELD_CONSTANTS.accountField 
+
+      const groupingField = validatedArgs.groupBy === 'account'
+        ? FIELD_CONSTANTS.accountField
         : FIELD_CONSTANTS.groupField;
 
       const sortOrder = validatedArgs.direction === 'increase' ? 'desc' : 'asc';
@@ -130,8 +117,8 @@ export class TopChangeTool {
         {
           range: {
             [timeField]: {
-              gte: previousPeriodStart,
-              lt: currentPeriodEnd,
+              gte: previousPeriodStartIso,
+              lt: currentPeriodEndIso,
             },
           },
         },
@@ -151,7 +138,7 @@ export class TopChangeTool {
       }
 
       const aggregationName = validatedArgs.groupBy === 'account' ? 'by_account' : 'by_group';
-      
+
       const query = {
         index,
         size: 0,
@@ -187,8 +174,8 @@ export class TopChangeTool {
                   filter: {
                     range: {
                       [timeField]: {
-                        gte: currentPeriodStart,
-                        lt: currentPeriodEnd,
+                        gte: currentPeriodStartIso,
+                        lt: currentPeriodEndIso,
                       },
                     },
                   },
@@ -197,8 +184,8 @@ export class TopChangeTool {
                   filter: {
                     range: {
                       [timeField]: {
-                        gte: previousPeriodStart,
-                        lt: previousPeriodEnd,
+                        gte: previousPeriodStartIso,
+                        lt: previousPeriodEndIso,
                       },
                     },
                   },
@@ -240,15 +227,15 @@ export class TopChangeTool {
 
       for (const bucket of buckets) {
         const item = bucket.key as string;
-        
+
         if (!item || item.trim() === '') {
           continue;
         }
-        
+
         const currentPeriod = bucket.current_period as any;
         const previousPeriod = bucket.previous_period as any;
         const visitDelta = bucket.visit_delta as any;
-        
+
         const currentCount = currentPeriod?.doc_count || 0;
         const previousCount = previousPeriod?.doc_count || 0;
         const change = visitDelta?.value || 0;
@@ -271,10 +258,10 @@ export class TopChangeTool {
       });
 
       return {
-        currentPeriodStart,
-        currentPeriodEnd,
-        previousPeriodStart,
-        previousPeriodEnd,
+        currentPeriodStart: currentPeriodStartIso,
+        currentPeriodEnd: currentPeriodEndIso,
+        previousPeriodStart: previousPeriodStartIso,
+        previousPeriodEnd: previousPeriodEndIso,
         groupBy: validatedArgs.groupBy,
         direction: validatedArgs.direction,
         items,
