@@ -1,171 +1,160 @@
-# Elasticsearch MCP
+# Elasticsearch MCP (VSee Fork)
 
-> **Model Context Protocol server for Elasticsearch integration with comprehensive security and performance features**
+> **Modified MCP server with hardcoded schemas matching VSee's Elasticsearch indexes. Specialized analytics tools optimized for stats-* indices.**
 
-[![npm version](https://badge.fury.io/js/elasticsearch-mcp.svg)](https://www.npmjs.com/package/elasticsearch-mcp)
+[![npm version](https://badge.fury.io/js/elasticsearch-mcp-vsee.svg)](https://www.npmjs.com/package/elasticsearch-mcp-vsee)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Elasticsearch](https://img.shields.io/badge/Elasticsearch-005571?logo=elasticsearch&logoColor=white)](https://www.elastic.co/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**elasticsearch-mcp** is a Model Context Protocol (MCP) server that provides standardized, secure tools for interacting with Elasticsearch clusters. Built with TypeScript and optimized for Elastic Cloud environments, it offers comprehensive data management capabilities with enterprise-grade security features.
+**elasticsearch-mcp-vsee** is a modified Model Context Protocol (MCP) server that provides specialized analytics tools for Elasticsearch clusters, optimized for VSee's stats-* indices. This fork features hardcoded schemas and field names that match VSee's specific Elasticsearch index structure, enabling specialized tools for account/group analytics, visit trends, platform breakdowns, and rating distributions. Built with TypeScript and optimized for Elastic Cloud environments, it offers comprehensive analytics capabilities with enterprise-grade security features.
 
 ## 🚀 Features
 
 - **🔐 Secure by Design**: Input validation, script sanitization, injection prevention
 - **☁️ Elastic Cloud Ready**: Native support for cloud ID and API key authentication  
-- **⚡ High Performance**: Streaming for large datasets, connection pooling, health monitoring
-- **🛠️ Comprehensive Tools**: 7 essential tools covering all major Elasticsearch operations
+- **⚡ High Performance**: Connection pooling, optimized query execution, efficient aggregations
+- **🛠️ Comprehensive Tools**: 11 specialized tools for analytics, summaries, and data exploration
 - **📊 Advanced Querying**: Full Elasticsearch DSL support with aggregations and highlighting
-- **📁 Data Export**: Stream large datasets to CSV with compression support
 - **🔍 Smart Validation**: Zod-based schemas with security-first validation
 - **📝 Full TypeScript**: Complete type safety with strict null checks
 
-## 📦 Installation
+## 🎯 Purpose
 
-```bash
-npm install elasticsearch-mcp
-```
+This MCP server is designed for **VSee's Open WebUI deployment** to provide specialized analytics tools for querying VSee's Elasticsearch `stats-*` indices. It integrates with VSee's Open WebUI infrastructure via MCPO (MCP OpenAPI bridge) to expose Elasticsearch analytics capabilities to LLMs.
 
-## 🏃‍♂️ Quick Start
+## 📦 Usage with VSee's Open WebUI Deployment
 
-### 1. Basic Setup
+This MCP server is automatically loaded by VSee's Open WebUI deployment through the MCP configuration. It connects to VSee's Elasticsearch deployment to provide analytics on visit statistics, account/group metrics, platform breakdowns, and more.
 
-```bash
-# Set your Elasticsearch credentials
-export ELASTIC_CLOUD_ID="your-cloud-id"
-export ELASTIC_API_KEY="your-api-key"
+### Configuration
 
-# Start the MCP server
-npx elasticsearch-mcp
-```
-
-### 2. Using with Claude Desktop
-
-Add to your Claude Desktop MCP configuration:
+The MCP server is configured in `vsee/mcp/config.json`:
 
 ```json
 {
   "mcpServers": {
-    "elasticsearch-mcp": {
+    "elasticsearch": {
       "command": "npx",
-      "args": ["elasticsearch-mcp"],
+      "args": ["-y", "elasticsearch-mcp-vsee"],
       "env": {
-        "ELASTIC_CLOUD_ID": "your-cloud-id",
-        "ELASTIC_API_KEY": "your-api-key"
+        "ELASTIC_NODE": "https://omtm.es.us-east-1.aws.found.io",
+        "ELASTIC_USERNAME": "your-username",
+        "ELASTIC_PASSWORD": "your-password",
+        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
       }
     }
   }
 }
 ```
 
-### 3. Using with any MCP Client
+The Open WebUI deployment automatically loads this configuration and starts the MCP server via MCPO, making all 11 tools available to the LLM for querying Elasticsearch data.
 
-```typescript
-import { ElasticMCPServer } from 'elasticsearch-mcp';
+## 🔄 Updating and Publishing
 
-const server = new ElasticMCPServer();
-await server.start();
-```
+### Making Changes
+
+1. **Develop locally**: Make changes to the code in `elasticsearch-mcp/`
+2. **Test your changes**: Use `npm run test:tools` to test against your Elasticsearch instance
+3. **Build**: Run `npm run build` to compile TypeScript
+4. **Publish**: Publish to npm with `npm publish --access public`
+   - Make sure to increment the version in `package.json` first
+
+### Updating VSee's Deployment
+
+After publishing a new version to npm:
+
+1. **Update `vsee/mcp/config.json`**: Change the package version in the `args` array:
+   ```json
+   {
+     "mcpServers": {
+       "elasticsearch": {
+         "command": "npx",
+         "args": ["-y", "elasticsearch-mcp-vsee@0.5.0"],  // Update version here
+         "env": {
+           ...
+         }
+       }
+     }
+   }
+   ```
+
+2. **Restart the MCPO service**: The MCPO container will automatically download and use the new version on restart:
+   ```bash
+   docker compose -f docker-compose.vsee.yaml restart mcpo
+   ```
+
+3. **Verify**: Check that the new version is loaded by examining the MCPO logs or testing the tools in Open WebUI.
+
+**Note**: You can also use `@latest` to always pull the latest version, but specifying a version number is recommended for production stability.
 
 ## 🛠️ Available Tools
 
 | Tool | Description | Use Cases |
 |------|-------------|-----------|
-| `fetch_indices` | List and filter Elasticsearch indices | Index management, monitoring |
-| `search_elasticsearch` | Advanced search with aggregations | Data analysis, querying |
-| `create_index` | Create indices with mappings/settings | Schema management |
-| `insert_data` | Insert documents with validation | Data ingestion |
-| `update_document` | Update documents with scripts | Data modification |
-| `delete_document` | Delete by ID or query | Data cleanup |
-| `export_to_csv` | Stream data to CSV files | Reporting, data export |
+| `get_index_fields` | Discover index fields and types | Schema exploration, field discovery |
+| `top_change` | Find top accounts or groups with highest visit increase/decrease | Trend analysis, account/group monitoring |
+| `get_subscription_breakdown` | Compare subscription tiers with metrics per tier | Subscription-tier analysis and comparisons |
+| `get_platform_breakdown` | Platform or platform version breakdown (provider/patient, platform/version) | Platform adoption, device preferences, version analysis |
+| `get_rating_distribution` | Rating histograms with statistics | Satisfaction analysis |
+| `get_visit_trends` | Time series visit trends (daily/weekly/monthly) | Trend visualization |
+| `get_usage_summary` | Comprehensive metrics summary with flexible filtering and grouping | Multi-dimensional analysis and comparisons |
 
 ## 📋 Tool Examples
 
-### Search with Aggregations
+### Get Account Summary
 
 ```json
 {
-  "tool": "search_elasticsearch",
+  "tool": "get_account_summary",
   "arguments": {
-    "index": "sales-data",
-    "query": {
-      "range": {
-        "date": {
-          "gte": "2024-01-01",
-          "lte": "2024-12-31"
-        }
-      }
-    },
-    "aggregations": {
-      "monthly_sales": {
-        "date_histogram": {
-          "field": "date",
-          "calendar_interval": "month"
-        },
-        "aggs": {
-          "total_revenue": {
-            "sum": { "field": "amount" }
-          }
-        }
-      }
-    }
+    "account": "example-customer",
+    "startDate": "now-1y",
+    "endDate": "now"
   }
 }
 ```
 
-### Export Large Dataset
+### Get Top Accounts by Growth
 
 ```json
 {
-  "tool": "export_to_csv",
+  "tool": "top_change",
   "arguments": {
-    "index": "user-analytics",
-    "query": {
-      "bool": {
-        "filter": [
-          { "term": { "status": "active" } },
-          { "range": { "last_login": { "gte": "2024-01-01" } } }
-        ]
-      }
-    },
-    "fields": ["user_id", "email", "last_login", "country"],
-    "filename": "active_users_2024.csv",
-    "compress": true,
-    "maxRows": 100000
+    "groupBy": "account",
+    "direction": "increase",
+    "topN": 10,
+    "currentPeriodDays": 30,
+    "previousPeriodDays": 30
   }
 }
 ```
 
-### Create Index with Schema
+### Get Platform Breakdown
 
 ```json
 {
-  "tool": "create_index",
+  "tool": "get_platform_breakdown",
   "arguments": {
-    "name": "product-catalog",
-    "mappings": {
-      "properties": {
-        "name": { "type": "text", "analyzer": "standard" },
-        "price": { "type": "float" },
-        "category": { "type": "keyword" },
-        "created_at": { "type": "date" },
-        "tags": { "type": "keyword" },
-        "description": { "type": "text" }
-      }
-    },
-    "settings": {
-      "number_of_shards": 1,
-      "number_of_replicas": 1,
-      "analysis": {
-        "analyzer": {
-          "product_analyzer": {
-            "type": "standard",
-            "stopwords": "_english_"
-          }
-        }
-      }
-    },
-    "aliases": ["products", "catalog"]
+    "role": "provider",
+    "breakdownType": "version",
+    "topN": 10,
+    "startDate": "now-30d",
+    "endDate": "now"
+  }
+}
+```
+
+### Get Visit Trends
+
+```json
+{
+  "tool": "get_visit_trends",
+  "arguments": {
+    "interval": "daily",
+    "startDate": "now-30d",
+    "endDate": "now",
+    "groupBy": "subscription"
   }
 }
 ```
@@ -174,36 +163,25 @@ await server.start();
 
 ### Environment Variables
 
+The MCP server reads configuration from environment variables. These are set in `vsee/mcp/config.json` under the `env` section:
+
 | Variable | Description | Required | Example |
 |----------|-------------|----------|---------|
-| `ELASTIC_CLOUD_ID` | Elastic Cloud deployment ID | Yes* | `deployment:dXMtY2VudHJhbDE=` |
-| `ELASTIC_API_KEY` | Elasticsearch API key | Yes* | `VnVhQ2ZHY0JDZGJrU...` |
-| `ELASTIC_NODE` | Self-hosted Elasticsearch URL | Yes* | `https://localhost:9200` |
-| `ELASTIC_USERNAME` | Basic auth username | No | `elastic` |
-| `ELASTIC_PASSWORD` | Basic auth password | No | `changeme` |
-| `LOG_LEVEL` | Logging level | No | `info` |
-| `LOG_FORMAT` | Log output format | No | `text` |
-| `MAX_CONCURRENT_REQUESTS` | Request concurrency limit | No | `10` |
+| `ELASTIC_NODE` | Elasticsearch URL | Yes | `https://omtm.es.us-east-1.aws.found.io` |
+| `ELASTIC_USERNAME` | Basic auth username | Yes | `your-username` |
+| `ELASTIC_PASSWORD` | Basic auth password | Yes | `your-password` |
+| `NODE_TLS_REJECT_UNAUTHORIZED` | Disable TLS verification (for self-signed certs) | No | `"0"` |
 
-*Either `ELASTIC_CLOUD_ID` or `ELASTIC_NODE` is required
+### Alternative: Elastic Cloud Authentication
 
-### Configuration File
+If using Elastic Cloud with cloud ID and API key:
 
-Create `.env` file:
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `ELASTIC_CLOUD_ID` | Elastic Cloud deployment ID | Yes* |
+| `ELASTIC_API_KEY` | Elasticsearch API key | Yes* |
 
-```bash
-# Elastic Cloud (recommended)
-ELASTIC_CLOUD_ID=your-deployment-id
-ELASTIC_API_KEY=your-api-key
-
-# Logging
-LOG_LEVEL=info
-LOG_FORMAT=json
-
-# Performance
-MAX_CONCURRENT_REQUESTS=10
-REQUEST_TIMEOUT_MS=30000
-```
+*Either `ELASTIC_CLOUD_ID` + `ELASTIC_API_KEY` OR `ELASTIC_NODE` + `ELASTIC_USERNAME` + `ELASTIC_PASSWORD` is required
 
 ## 🔒 Security Features
 
@@ -239,13 +217,11 @@ REQUEST_TIMEOUT_MS=30000
                        ┌─────────────┐
                        │   Tools     │
                        │             │
-                       │ • fetch     │
                        │ • search    │
-                       │ • create    │
-                       │ • insert    │
-                       │ • update    │
-                       │ • delete    │
-                       │ • export    │
+                       │ • fields    │
+                       │ • summaries │
+                       │ • trends    │
+                       │ • analytics │
                        └─────────────┘
 ```
 
@@ -253,14 +229,14 @@ REQUEST_TIMEOUT_MS=30000
 
 ### Benchmarks
 - **Search**: <500ms average response time
-- **Large Exports**: 10K+ documents/second with streaming
+- **Aggregations**: Optimized for large-scale analytics
 - **Memory Usage**: <100MB for typical operations
 - **Concurrent Requests**: Up to 10 simultaneous operations
 
 ### Optimization Features
 - **Connection Pooling**: Reuses Elasticsearch connections
-- **Streaming**: Memory-efficient processing of large datasets
-- **Compression**: Reduces export file sizes by 70%+
+- **Optimized Queries**: Efficient aggregation pipelines
+- **Smart Caching**: Reduced redundant queries
 - **Health Monitoring**: Automatic reconnection on failures
 
 ## 🔧 Development
@@ -268,25 +244,26 @@ REQUEST_TIMEOUT_MS=30000
 ### Setup Development Environment
 
 ```bash
-# Clone repository
-git clone https://github.com/RajwardhanShinde/elk-mcp.git
-cd elk-mcp
-
 # Install dependencies
 npm install
 
-# Set up environment
-cp .env.example .env
-# Edit .env with your Elasticsearch credentials
+# Set up environment variables
+export ELASTIC_NODE="https://your-elasticsearch-url"
+export ELASTIC_USERNAME="your-username"
+export ELASTIC_PASSWORD="your-password"
+export NODE_TLS_REJECT_UNAUTHORIZED="0"  # If needed for self-signed certs
 
 # Run in development mode
 npm run dev
 
-# Run tests
-npm test
+# Test tools against live Elasticsearch
+npm run test:tools
 
 # Build for production
 npm run build
+
+# Publish new version (after incrementing version in package.json)
+npm publish --access public
 ```
 
 ### Project Structure
@@ -301,57 +278,9 @@ elasticsearch-mcp/
 │   ├── config.ts        # Configuration management
 │   ├── logger.ts        # Structured logging
 │   └── server.ts        # Main MCP server
-├── tests/               # Comprehensive test suite
-├── docs/                # Documentation
+├── tests/               # Test suite
 └── build/               # Compiled output
 ```
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-### Development Workflow
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Ensure all tests pass
-5. Submit a pull request
-
-## 📚 Documentation
-
-- [Quick Start Guide](docs/guides/quick-start.md)
-- [API Reference](docs/api/tools.md)
-- [Configuration Guide](docs/api/configuration.md)
-- [Elastic Cloud Setup](docs/guides/elastic-cloud-setup.md)
-- [Troubleshooting](docs/guides/troubleshooting.md)
-- [Examples](docs/examples/)
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Connection Failed**
-```bash
-# Check credentials
-echo $ELASTIC_CLOUD_ID
-echo $ELASTIC_API_KEY
-
-# Test connection
-curl -H "Authorization: ApiKey $ELASTIC_API_KEY" \\
-     "$ELASTIC_NODE/_cluster/health"
-```
-
-**Permission Denied**
-- Ensure API key has required privileges
-- Check index permissions
-- Verify cluster access
-
-**Tool Validation Errors**
-- Check input parameter types
-- Validate required fields
-- Review field name restrictions
-
-See [Troubleshooting Guide](docs/guides/troubleshooting.md) for more details.
 
 ## 📄 License
 
@@ -359,17 +288,17 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🏷️ Version History
 
-- **v0.1.0** - Initial release with 7 core tools
+- **v0.5.0** - Added `find_entities_by_metric` tool with multi-metric filtering support, updated default limits
+- **v0.4.0** - Tool consolidation: merged 14 tools into 11 specialized analytics tools
+- **v0.3.0** - Specialized analytics tools for stats-* indices
 - Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## 🔗 Links
 
-- [npm Package](https://www.npmjs.com/package/elasticsearch-mcp)
-- [GitHub Repository](https://github.com/RajwardhanShinde/elk-mcp)
-- [Issue Tracker](https://github.com/RajwardhanShinde/elk-mcp/issues)
+- [npm Package](https://www.npmjs.com/package/elasticsearch-mcp-vsee)
 - [Elasticsearch Documentation](https://www.elastic.co/guide/)
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 
 ---
 
-**Built with ❤️ for the Elasticsearch and MCP communities**
+**Built for VSee by VSee**

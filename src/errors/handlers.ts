@@ -67,6 +67,89 @@ export class ElasticsearchError extends ElasticMCPError {
     });
     this.name = 'ElasticsearchError';
   }
+
+  static fromResponseError(error: any, toolName: string, args?: unknown): ElasticsearchError {
+    // Check for circuit breaking exception (data too large)
+    const errorBody = error.body || error.meta?.body || {};
+    const errorType = errorBody.error?.type || errorBody.type;
+    const errorReason = errorBody.error?.reason || errorBody.reason || error.message || '';
+    
+    // Check for circuit breaking or data-related errors
+    if (
+      errorType === 'circuit_breaking_exception' ||
+      errorReason.toLowerCase().includes('circuit_breaking_exception') ||
+      errorReason.toLowerCase().includes('data too large') ||
+      errorReason.toLowerCase().includes('would be') ||
+      errorReason.toLowerCase().includes('larger than the limit')
+    ) {
+      const rootCauses = errorBody.error?.root_cause || [];
+      const dataSizeInfo = rootCauses.find((cause: any) => 
+        cause.reason?.includes('would be') || cause.reason?.includes('larger than')
+      );
+      
+      let dataUsageMessage = 'Query exceeded Elasticsearch data usage limits. ';
+      
+      if (dataSizeInfo?.reason) {
+        dataUsageMessage += dataSizeInfo.reason;
+      } else if (errorReason) {
+        dataUsageMessage += errorReason;
+      } else {
+        dataUsageMessage += 'The query requires too much memory to execute.';
+      }
+      
+      dataUsageMessage += ' Try reducing the date range, adding filters (account/group/subscription), or using a smaller time interval.';
+      
+      return new ElasticsearchError(
+        dataUsageMessage,
+        error,
+        {
+          tool: toolName,
+          args,
+          errorType: 'DATA_USAGE_LIMIT_EXCEEDED',
+          elasticsearchError: {
+            type: errorType,
+            reason: errorReason,
+            rootCauses: rootCauses.map((cause: any) => ({
+              type: cause.type,
+              reason: cause.reason,
+            })),
+          },
+        }
+      );
+    }
+    
+    // Check for other common Elasticsearch errors
+    if (errorType === 'query_shard_exception' || errorReason.toLowerCase().includes('query_shard_exception')) {
+      return new ElasticsearchError(
+        `Elasticsearch query error: ${errorReason || 'Query execution failed'}. Try adjusting your query parameters.`,
+        error,
+        {
+          tool: toolName,
+          args,
+          errorType: 'QUERY_ERROR',
+          elasticsearchError: {
+            type: errorType,
+            reason: errorReason,
+          },
+        }
+      );
+    }
+    
+    // Generic Elasticsearch error with more context
+    return new ElasticsearchError(
+      `Elasticsearch error: ${errorReason || error.message || 'Unknown error occurred'}`,
+      error,
+      {
+        tool: toolName,
+        args,
+        errorType: errorType || 'UNKNOWN',
+        elasticsearchError: {
+          type: errorType,
+          reason: errorReason,
+        },
+      }
+    );
+  }
 }
 
 export interface ErrorResponse {
@@ -117,12 +200,16 @@ export class ErrorHandler {
         requestId,
       }, error);
 
+      // Include the actual error message for debugging
       return {
         error: {
           code: 'INTERNAL_ERROR',
-          message: 'An unexpected error occurred',
+          message: error.message || 'An unexpected error occurred',
           statusCode: 500,
-          context: undefined,
+          context: {
+            name: error.name,
+            stack: error.stack,
+          },
           timestamp: new Date().toISOString(),
           requestId,
         },

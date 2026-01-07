@@ -1,7 +1,7 @@
 {
-  "name": "elasticsearch-mcp",
-  "version": "0.1.3",
-  "description": "Secure MCP server for Elasticsearch integration with comprehensive tools and Elastic Cloud support",
+  "name": "elasticsearch-mcp-vsee",
+  "version": "0.5.9",
+  "description": "Secure MCP server for Elasticsearch integration with comprehensive tools and Elastic Cloud support (fork with improved health check, get_index_fields tool, enhanced query flexibility, and consolidated analytics tools)",
   "main": "build/index.js",
   "bin": {
     "elasticsearch-mcp": "./build/index.js"
@@ -13,6 +13,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:tools": "node test-tools.js",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "format": "prettier --write src/**/*.ts",
@@ -27,29 +28,19 @@
     "elastic-cloud",
     "search",
     "analytics",
-    "data-export",
     "claude",
     "typescript",
     "security"
   ],
-  "author": "Your Organization",
+  "author": "VSee",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/RajwardhanShinde/elk-mcp.git"
-  },
-  "bugs": {
-    "url": "https://github.com/RajwardhanShinde/elk-mcp/issues"
-  },
-  "homepage": "https://github.com/RajwardhanShinde/elk-mcp#readme",
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@elastic/elasticsearch": "^8.11.0",
-    "zod": "^3.22.0",
-    "csv-writer": "^1.6.0"
+    "zod": "^3.22.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

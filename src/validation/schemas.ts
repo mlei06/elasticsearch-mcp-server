@@ -7,6 +7,12 @@ export const IndexNameSchema = z.string()
   .refine(name => !name.startsWith('.') || name.startsWith('.'), 'Index name cannot start with a dot unless it is a system index')
   .refine(name => name !== '.' && name !== '..', 'Index name cannot be "." or ".."');
 
+// Index pattern schema that allows wildcards (*, ?, and comma-separated patterns)
+export const IndexPatternSchema = z.string()
+  .min(1, 'Index pattern cannot be empty')
+  .max(255, 'Index pattern cannot exceed 255 characters')
+  .regex(/^[a-z0-9_.*?,\-]+$/, 'Index pattern must contain only lowercase letters, numbers, hyphens, underscores, dots, wildcards (*, ?), and commas');
+
 export const DocumentIdSchema = z.string()
   .min(1, 'Document ID cannot be empty')
   .max(512, 'Document ID cannot exceed 512 characters');

@@ -1,44 +1,57 @@
-export { FetchIndicestool } from './fetch-indices.js';
-export { CreateIndexTool } from './create-index.js';
-export { InsertDataTool } from './insert-data.js';
-export { UpdateDocumentTool } from './update-document.js';
-export { DeleteDocumentTool } from './delete-document.js';
-export { SearchElasticsearchTool } from './search-elasticsearch.js';
-export { ExportToCSVTool } from './export-to-csv.js';
+export { GetIndexFieldsTool } from './get-index-fields.js';
+export { TopChangeTool } from './top-change.js';
+export { PeriodSummaryTool } from './get-subscription-breakdown.js';
+export { GetPlatformBreakdownTool } from './get-platform-breakdown.js';
+export { GetRatingDistributionTool } from './get-rating-distribution.js';
+export { GetVisitTrendsTool } from './get-visit-trends.js';
+export { GetUsageSummaryTool } from './get-usage-summary.js';
+export { FindEntitiesByMetricTool } from './find-entities-by-metric.js';
 
 export type {
-  FetchIndicesArgs,
-  FetchIndicesResult,
-  IndexInfo,
-} from './fetch-indices.js';
+  GetIndexFieldsArgs,
+  GetIndexFieldsResult,
+  FieldInfo,
+} from './get-index-fields.js';
 
 export type {
-  CreateIndexArgs,
-  CreateIndexResult,
-} from './create-index.js';
+  TopChangeArgs,
+  TopChangeResult,
+  ChangeInfo,
+} from './top-change.js';
 
 export type {
-  InsertDataArgs,
-  InsertDataResult,
-} from './insert-data.js';
+  PeriodSummaryArgs,
+  PeriodSummaryResult,
+  SubscriptionMetrics,
+} from './get-subscription-breakdown.js';
 
 export type {
-  UpdateDocumentArgs,
-  UpdateDocumentResult,
-} from './update-document.js';
+  GetPlatformBreakdownArgs,
+  PlatformBreakdownResult,
+  PlatformMetrics,
+} from './get-platform-breakdown.js';
 
 export type {
-  DeleteDocumentArgs,
-  DeleteDocumentResult,
-} from './delete-document.js';
+  GetRatingDistributionArgs,
+  RatingDistributionResult,
+  RatingBucket,
+} from './get-rating-distribution.js';
 
 export type {
-  SearchArgs,
-  SearchResult,
-  SearchHit,
-} from './search-elasticsearch.js';
+  GetVisitTrendsArgs,
+  VisitTrendsResult,
+  TrendDataPoint,
+  GroupedTrendData,
+} from './get-visit-trends.js';
 
 export type {
-  ExportToCSVArgs,
-  ExportToCSVResult,
-} from './export-to-csv.js';
+  GetUsageSummaryArgs,
+  UsageSummaryResult,
+  UsageSummaryItem,
+} from './get-usage-summary.js';
+
+export type {
+  FindEntitiesByMetricArgs,
+  FindEntitiesByMetricResult,
+  EntityMetricResult,
+} from './find-entities-by-metric.js';

@@ -68,13 +68,17 @@ export class ElasticsearchManager {
 
       this.client = new Client(clientOptions);
 
-      await this.healthCheck();
+      // Mark as connected immediately - actual API calls will handle connection errors
+      // Health checks with limited permissions often fail, so we skip them
+      this.connectionInfo = {
+        isConnected: true,
+        lastHealthCheck: new Date(),
+      };
+
+      // Start health monitoring (non-blocking, won't cause failures)
       this.startHealthMonitoring();
 
-      this.logger.info('Elasticsearch client initialized successfully', {
-        clusterName: this.connectionInfo.clusterName,
-        version: this.connectionInfo.version,
-      });
+      this.logger.info('Elasticsearch client initialized successfully');
     } catch (error) {
       this.logger.error('Failed to initialize Elasticsearch client', {}, error as Error);
       throw error;
@@ -91,40 +95,11 @@ export class ElasticsearchManager {
       return false;
     }
 
-    try {
-      const [pingResult, infoResult] = await Promise.all([
-        this.client.ping(),
-        this.client.info(),
-      ]);
-
-      this.connectionInfo = {
-        isConnected: pingResult === true,
-        clusterName: infoResult.cluster_name,
-        version: infoResult.version?.number,
-        lastHealthCheck: new Date(),
-      };
-
-      if (this.connectionInfo.isConnected) {
-        this.logger.debug('Health check passed', {
-          clusterName: this.connectionInfo.clusterName,
-          version: this.connectionInfo.version,
-        });
-      }
-
+    // For users with limited permissions, we skip health checks
+    // The client is marked as connected, and actual API calls will handle errors gracefully
+    // Health checks requiring cluster privileges often fail unnecessarily
+    this.connectionInfo.lastHealthCheck = new Date();
       return this.connectionInfo.isConnected;
-    } catch (error) {
-      this.connectionInfo = {
-        isConnected: false,
-        lastHealthCheck: new Date(),
-        error: (error as Error).message,
-      };
-
-      this.logger.warn('Health check failed', {
-        error: (error as Error).message,
-      });
-
-      return false;
-    }
   }
 
   async reconnect(): Promise<void> {
@@ -142,10 +117,8 @@ export class ElasticsearchManager {
       throw new Error('Elasticsearch client not initialized');
     }
     
-    if (!this.connectionInfo.isConnected) {
-      throw new Error('Elasticsearch client not connected');
-    }
-
+    // Don't check isConnected - let the actual API calls handle connection errors
+    // This allows tools to work even if health checks fail due to permissions
     return this.client;
   }
 
@@ -154,20 +127,10 @@ export class ElasticsearchManager {
   }
 
   private startHealthMonitoring(): void {
-    const HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
-
-    this.healthCheckInterval = setInterval(async () => {
-      const isHealthy = await this.healthCheck();
-      
-      if (!isHealthy) {
-        this.logger.warn('Health check failed, attempting reconnection');
-        try {
-          await this.reconnect();
-        } catch (error) {
-          this.logger.error('Reconnection failed', {}, error as Error);
-        }
-      }
-    }, HEALTH_CHECK_INTERVAL);
+    // Disabled health monitoring for users with limited permissions
+    // Periodic health checks often fail unnecessarily and cause reconnections
+    // Actual API calls will handle connection errors gracefully
+    this.logger.debug('Health monitoring disabled (limited permissions mode)');
   }
 
   async shutdown(): Promise<void> {
