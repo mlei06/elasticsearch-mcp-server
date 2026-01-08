@@ -6,7 +6,14 @@ import { FIELD_CONSTANTS } from '../utils/field-constants.js';
 import { resolveDate } from '../utils/date-math.js';
 
 const TopChangeArgsSchema = z.object({
-  groupBy: z.enum(['account', 'group']).describe('Group by: "account" to find top accounts by visit change, "group" to find top groups by visit change'),
+  groupBy: z.enum([
+    'account',
+    'group',
+    'provider_platform',
+    'patient_platform',
+    'provider_platform_version',
+    'patient_platform_version'
+  ]).describe('Group by: "account", "group", "provider_platform", "patient_platform", "provider_platform_version", or "patient_platform_version"'),
   direction: z.enum(['increase', 'decrease']).describe('Direction: "increase" for highest growth, "decrease" for highest decline'),
   topN: z.number().int().min(1).max(50).default(5).describe('Number of top items to return (default: 5, max: 50)'),
   startDate: z.string().optional().describe('Start date for current period in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d"'),
@@ -15,7 +22,7 @@ const TopChangeArgsSchema = z.object({
 }).strict();
 
 export interface TopChangeArgs {
-  groupBy: 'account' | 'group';
+  groupBy: 'account' | 'group' | 'provider_platform' | 'patient_platform' | 'provider_platform_version' | 'patient_platform_version';
   direction: 'increase' | 'decrease';
   topN?: number;
   startDate?: string;
@@ -36,7 +43,7 @@ export interface TopChangeResult {
   currentPeriodEnd: string;
   previousPeriodStart: string;
   previousPeriodEnd: string;
-  groupBy: 'account' | 'group';
+  groupBy: 'account' | 'group' | 'provider_platform' | 'patient_platform' | 'provider_platform_version' | 'patient_platform_version';
   direction: 'increase' | 'decrease';
   items: ChangeInfo[];
   total: number;
@@ -107,9 +114,35 @@ export class TopChangeTool {
       const testVisitField = FIELD_CONSTANTS.testVisitField;
       const subscriptionField = FIELD_CONSTANTS.subscriptionField;
 
-      const groupingField = validatedArgs.groupBy === 'account'
-        ? FIELD_CONSTANTS.accountField
-        : FIELD_CONSTANTS.groupField;
+      let groupingField: string;
+      let aggregationName: string;
+
+      switch (validatedArgs.groupBy) {
+        case 'account':
+          groupingField = FIELD_CONSTANTS.accountField;
+          aggregationName = 'by_account';
+          break;
+        case 'group':
+          groupingField = FIELD_CONSTANTS.groupField;
+          aggregationName = 'by_group';
+          break;
+        case 'provider_platform':
+          groupingField = FIELD_CONSTANTS.providerPlatformField;
+          aggregationName = 'by_provider_platform';
+          break;
+        case 'patient_platform':
+          groupingField = FIELD_CONSTANTS.patientPlatformField;
+          aggregationName = 'by_patient_platform';
+          break;
+        case 'provider_platform_version':
+          groupingField = FIELD_CONSTANTS.providerPlatformVersionField;
+          aggregationName = 'by_provider_platform_version';
+          break;
+        case 'patient_platform_version':
+          groupingField = FIELD_CONSTANTS.patientPlatformVersionField;
+          aggregationName = 'by_patient_platform_version';
+          break;
+      }
 
       const sortOrder = validatedArgs.direction === 'increase' ? 'desc' : 'asc';
 
@@ -137,7 +170,7 @@ export class TopChangeTool {
         });
       }
 
-      const aggregationName = validatedArgs.groupBy === 'account' ? 'by_account' : 'by_group';
+      // aggregationName is already set above
 
       const query = {
         index,

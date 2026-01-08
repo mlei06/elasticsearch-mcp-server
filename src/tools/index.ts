@@ -4,8 +4,9 @@ export { PeriodSummaryTool } from './get-subscription-breakdown.js';
 export { GetPlatformBreakdownTool } from './get-platform-breakdown.js';
 export { GetRatingDistributionTool } from './get-rating-distribution.js';
 export { GetVisitTrendsTool } from './get-visit-trends.js';
-export { GetUsageSummaryTool } from './get-usage-summary.js';
+export { GetUsageProfileTool } from './get-usage-profile.js';
 export { FindEntitiesByMetricTool } from './find-entities-by-metric.js';
+export { GetUsageLeaderboardTool } from './get-usage-leaderboard.js';
 
 export type {
   GetIndexFieldsArgs,
@@ -45,13 +46,19 @@ export type {
 } from './get-visit-trends.js';
 
 export type {
-  GetUsageSummaryArgs,
-  UsageSummaryResult,
-  UsageSummaryItem,
-} from './get-usage-summary.js';
+  GetUsageProfileArgs,
+  UsageProfileResult,
+  UsageProfileItem,
+} from './get-usage-profile.js';
 
 export type {
   FindEntitiesByMetricArgs,
   FindEntitiesByMetricResult,
   EntityMetricResult,
 } from './find-entities-by-metric.js';
+
+export type {
+  GetUsageLeaderboardArgs,
+  GetUsageLeaderboardResult,
+  EntityUsageMetrics,
+} from './get-usage-leaderboard.js';

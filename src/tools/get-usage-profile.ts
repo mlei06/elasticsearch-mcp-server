@@ -5,7 +5,7 @@ import { ValidationError, ElasticsearchError } from '../errors/handlers.js';
 import { AGGREGATION_LIMITS } from '../utils/aggregation-limits.js';
 import { FIELD_CONSTANTS } from '../utils/field-constants.js';
 
-const GetUsageSummaryArgsSchema = z.object({
+const GetUsageProfileArgsSchema = z.object({
   startDate: z.string().optional().describe('Start date in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d"'),
   endDate: z.string().optional().describe('End date in ISO format (YYYY-MM-DD) or date math (e.g., "now"). Defaults to "now"'),
   account: z.string().optional().describe('Optional account name to filter by'),
@@ -14,7 +14,7 @@ const GetUsageSummaryArgsSchema = z.object({
   groupBy: z.enum(['none', 'subscription', 'account', 'group']).optional().default('none').describe('Optional grouping dimension (default: none). When set, returns separate summaries for each group value.'),
 }).strict();
 
-export interface GetUsageSummaryArgs {
+export interface GetUsageProfileArgs {
   startDate?: string;
   endDate?: string;
   account?: string;
@@ -23,7 +23,7 @@ export interface GetUsageSummaryArgs {
   groupBy?: 'none' | 'subscription' | 'account' | 'group';
 }
 
-export interface UsageSummaryItem extends Record<string, any> {
+export interface UsageProfileItem extends Record<string, any> {
   total_visits: number;
   unique_accounts: number;
   unique_groups: number;
@@ -40,31 +40,31 @@ export interface UsageSummaryItem extends Record<string, any> {
   patient_platform_distribution: Array<{ platform: string; count: number; percentage: number }>;
 }
 
-export interface UsageSummaryResult {
+export interface UsageProfileResult {
   period: string;
   startDate: string;
   endDate: string;
   groupBy: string;
-  summary: UsageSummaryItem | UsageSummaryItem[];
+  summary: UsageProfileItem | UsageProfileItem[];
 }
 
-export class GetUsageSummaryTool {
+export class GetUsageProfileTool {
   private elasticsearch: ElasticsearchManager;
   private logger: Logger;
 
   constructor(elasticsearch: ElasticsearchManager, logger: Logger) {
     this.elasticsearch = elasticsearch;
-    this.logger = logger.child({ tool: 'get-usage-summary' });
+    this.logger = logger.child({ tool: 'get-usage-profile' });
   }
 
-  async execute(args: unknown): Promise<UsageSummaryResult> {
+  async execute(args: unknown): Promise<UsageProfileResult> {
     try {
-      const validatedArgs = GetUsageSummaryArgsSchema.parse(args);
+      const validatedArgs = GetUsageProfileArgsSchema.parse(args);
       let startDate = validatedArgs.startDate || 'now-30d';
       let endDate = validatedArgs.endDate || 'now';
       const groupBy = validatedArgs.groupBy || 'none';
-      
-      this.logger.info('Getting usage summary', {
+
+      this.logger.info('Executing usage profile', {
         startDate,
         endDate,
         account: validatedArgs.account,
@@ -242,7 +242,7 @@ export class GetUsageSummaryTool {
       const response = await client.search(query);
       const responseAggs = response.aggregations as any;
 
-      const processSummaryItem = (itemAggs: any): UsageSummaryItem => {
+      const processSummaryItem = (itemAggs: any): UsageProfileItem => {
         const totalVisits = itemAggs?.total_visits?.value || 0;
 
         const subscriptionBuckets = itemAggs?.subscription_distribution?.buckets || [];
@@ -288,7 +288,7 @@ export class GetUsageSummaryTool {
         };
       };
 
-      let summary: UsageSummaryItem | UsageSummaryItem[];
+      let summary: UsageProfileItem | UsageProfileItem[];
 
       if (groupBy === 'none') {
         summary = processSummaryItem(responseAggs);
@@ -325,11 +325,7 @@ export class GetUsageSummaryTool {
       }
 
       this.logger.error('Failed to get usage summary', {}, error as Error);
-      throw new ElasticsearchError(
-        'Failed to get usage summary from Elasticsearch',
-        error as Error,
-        { args }
-      );
+      throw new ElasticsearchError('Failed to get usage profile', error as Error, { args });
     }
   }
 }

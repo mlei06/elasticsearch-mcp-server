@@ -13,8 +13,9 @@ import {
   GetPlatformBreakdownTool,
   GetRatingDistributionTool,
   GetVisitTrendsTool,
-  GetUsageSummaryTool,
+  GetUsageProfileTool,
   FindEntitiesByMetricTool,
+  GetUsageLeaderboardTool,
 } from './tools/index.js';
 
 export class ElasticMCPServer {
@@ -31,8 +32,9 @@ export class ElasticMCPServer {
   private getPlatformBreakdownTool: GetPlatformBreakdownTool;
   private getRatingDistributionTool: GetRatingDistributionTool;
   private getVisitTrendsTool: GetVisitTrendsTool;
-  private getUsageSummaryTool: GetUsageSummaryTool;
+  private getUsageProfileTool: GetUsageProfileTool;
   private findEntitiesByMetricTool: FindEntitiesByMetricTool;
+  private getUsageLeaderboardTool: GetUsageLeaderboardTool;
 
   constructor() {
     this.config = loadConfig();
@@ -58,8 +60,9 @@ export class ElasticMCPServer {
     this.getPlatformBreakdownTool = new GetPlatformBreakdownTool(this.elasticsearch, this.logger);
     this.getRatingDistributionTool = new GetRatingDistributionTool(this.elasticsearch, this.logger);
     this.getVisitTrendsTool = new GetVisitTrendsTool(this.elasticsearch, this.logger);
-    this.getUsageSummaryTool = new GetUsageSummaryTool(this.elasticsearch, this.logger);
+    this.getUsageProfileTool = new GetUsageProfileTool(this.elasticsearch, this.logger);
     this.findEntitiesByMetricTool = new FindEntitiesByMetricTool(this.elasticsearch, this.logger);
+    this.getUsageLeaderboardTool = new GetUsageLeaderboardTool(this.elasticsearch, this.logger);
 
     this.setupHandlers();
     this.setupGracefulShutdown();
@@ -102,14 +105,14 @@ export class ElasticMCPServer {
           },
           {
             name: 'top_change',
-            description: 'Find top N accounts or groups with highest visit/usage increase or decrease between two consecutive time periods. Returns items ranked by change with current period count, previous period count, absolute change, and percentage change. The previous period is automatically calculated to match the duration of the current period, ending where the current period starts. Supports filtering by subscription tier.',
+            description: 'Find top N items (accounts, groups, platforms, or versions) with highest visit/usage increase or decrease between two consecutive time periods. Returns items ranked by change with current period count, previous period count, absolute change, and percentage change. The previous period is automatically calculated to match the duration of the current period, ending where the current period starts. Supports filtering by subscription tier.',
             inputSchema: {
               type: 'object',
               properties: {
                 groupBy: {
                   type: 'string',
-                  enum: ['account', 'group'],
-                  description: 'Group by: "account" to find top accounts by visit change, "group" to find top groups by visit change',
+                  enum: ['account', 'group', 'provider_platform', 'patient_platform', 'provider_platform_version', 'patient_platform_version'],
+                  description: 'Group by: "account", "group", "provider_platform", "patient_platform", "provider_platform_version", or "patient_platform_version"',
                 },
                 direction: {
                   type: 'string',
@@ -298,8 +301,8 @@ export class ElasticMCPServer {
             },
           },
           {
-            name: 'get_usage_summary',
-            description: 'Get usage summary for a time period, can optionally be filtered by account, group, or subscription. Returns visits, unique counts, ratings, call duration plus distribution breakdowns (subscription tiers, provider platforms, patient platforms).',
+            name: 'get_usage_profile',
+            description: 'Get a comprehensive usage profile for a specific scope (global, or a specific account/group). Includes deep breakdowns like platform distribution (Web vs iOS) and subscription tiers. Best for exploring HOW a specific context is using the system.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -412,6 +415,57 @@ export class ElasticMCPServer {
               additionalProperties: false,
             },
           },
+          {
+            name: 'get_usage_leaderboard',
+            description: 'Generate a ranked leaderboard of accounts, groups, or platforms based on a specific metric (e.g., "top 10 providers by visit count" or "top 5 groups by unique patients"). Best for identifying high-usage entities or outliers. Returns key metrics like visits, unique counts, ratings, and duration.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                entityType: {
+                  type: 'string',
+                  enum: ['account', 'group', 'provider_platform', 'patient_platform', 'provider_platform_version', 'patient_platform_version'],
+                  description: 'Type of entity to analyze',
+                },
+                mode: {
+                  type: 'string',
+                  enum: ['top_n', 'specific'],
+                  description: 'Mode: "top_n" to find top entities by usage, "specific" to get usage for a specific entity',
+                },
+                limit: {
+                  type: 'number',
+                  minimum: 1,
+                  maximum: 50,
+                  default: 10,
+                  description: 'Max number of results (for top_n mode, default 10)',
+                },
+                entityValue: {
+                  type: 'string',
+                  description: 'Specific entity name (required if mode is "specific")',
+                },
+                startDate: {
+                  type: 'string',
+                  description: 'Start date in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d"). Defaults to "now-30d"',
+                },
+                endDate: {
+                  type: 'string',
+                  description: 'End date in ISO format (YYYY-MM-DD) or date math (e.g., "now"). Defaults to "now"',
+                },
+                subscription: {
+                  type: 'string',
+                  enum: ['Enterprise', 'Premium', 'FVC', 'BVC', 'Plus'],
+                  description: 'Optional subscription tier to filter by',
+                },
+                orderBy: {
+                  type: 'string',
+                  enum: ['visit_count', 'unique_accounts', 'unique_providers', 'unique_patients', 'unique_groups'],
+                  default: 'visit_count',
+                  description: 'Metric to order top N entities by (default: visit_count).',
+                },
+              },
+              required: ['entityType', 'mode'],
+              additionalProperties: false,
+            },
+          },
         ],
       };
     });
@@ -449,11 +503,14 @@ export class ElasticMCPServer {
           case 'get_visit_trends':
             result = await this.getVisitTrendsTool.execute(args);
             break;
-          case 'get_usage_summary':
-            result = await this.getUsageSummaryTool.execute(args);
+          case 'get_usage_profile':
+            result = await this.getUsageProfileTool.execute(args);
             break;
           case 'find_entities_by_metric':
             result = await this.findEntitiesByMetricTool.execute(args);
+            break;
+          case 'get_usage_leaderboard':
+            result = await this.getUsageLeaderboardTool.execute(args);
             break;
           default:
             throw new Error(`Unknown tool: ${name}`);
