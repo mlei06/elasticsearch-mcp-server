@@ -1,9 +1,9 @@
-import { ElasticsearchManager } from '../elasticsearch/client.js';
-import { Logger } from '../logger.js';
+import { BaseTool } from './base-tool.js';
 import { z } from 'zod';
-import { ValidationError, ElasticsearchError } from '../errors/handlers.js';
-import { AGGREGATION_LIMITS } from '../utils/aggregation-limits.js';
 import { FIELD_CONSTANTS } from '../utils/field-constants.js';
+import { buildCommonFilters } from '../utils/query-helpers.js';
+import { StandardResponse } from './types.js';
+import { AGGREGATION_LIMITS } from '../utils/aggregation-limits.js';
 
 const GetUsageProfileArgsSchema = z.object({
   startDate: z.string().optional().describe('Start date in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d"'),
@@ -14,14 +14,7 @@ const GetUsageProfileArgsSchema = z.object({
   groupBy: z.enum(['none', 'subscription', 'account', 'group']).optional().default('none').describe('Optional grouping dimension (default: none). When set, returns separate summaries for each group value.'),
 }).strict();
 
-export interface GetUsageProfileArgs {
-  startDate?: string;
-  endDate?: string;
-  account?: string;
-  group?: string;
-  subscription?: string;
-  groupBy?: 'none' | 'subscription' | 'account' | 'group';
-}
+export type GetUsageProfileArgs = z.infer<typeof GetUsageProfileArgsSchema>;
 
 export interface UsageProfileItem extends Record<string, any> {
   total_visits: number;
@@ -40,293 +33,243 @@ export interface UsageProfileItem extends Record<string, any> {
   patient_platform_distribution: Array<{ platform: string; count: number; percentage: number }>;
 }
 
-export interface UsageProfileResult {
-  period: string;
-  startDate: string;
-  endDate: string;
-  groupBy: string;
-  summary: UsageProfileItem | UsageProfileItem[];
-}
+export type UsageProfileResult = StandardResponse<UsageProfileItem[]>;
 
-export class GetUsageProfileTool {
-  private elasticsearch: ElasticsearchManager;
-  private logger: Logger;
-
-  constructor(elasticsearch: ElasticsearchManager, logger: Logger) {
-    this.elasticsearch = elasticsearch;
-    this.logger = logger.child({ tool: 'get-usage-profile' });
+export class GetUsageProfileTool extends BaseTool<typeof GetUsageProfileArgsSchema, UsageProfileResult> {
+  constructor(elasticsearch: any, logger: any) {
+    super(elasticsearch, logger, 'get-usage-profile');
   }
 
-  async execute(args: unknown): Promise<UsageProfileResult> {
-    try {
-      const validatedArgs = GetUsageProfileArgsSchema.parse(args);
-      let startDate = validatedArgs.startDate || 'now-30d';
-      let endDate = validatedArgs.endDate || 'now';
-      const groupBy = validatedArgs.groupBy || 'none';
+  get schema() {
+    return GetUsageProfileArgsSchema;
+  }
 
-      this.logger.info('Executing usage profile', {
-        startDate,
-        endDate,
-        account: validatedArgs.account,
-        group: validatedArgs.group,
-        subscription: validatedArgs.subscription,
-        groupBy,
-      });
+  protected async run(args: GetUsageProfileArgs): Promise<UsageProfileResult> {
+    const groupBy = args.groupBy || 'none';
+    const { startIso: startDateIso, endIso: endDateIso } =
+      this.resolveTimeRange(args.startDate, args.endDate, 'now-30d', 'now');
 
-      const client = this.elasticsearch.getClient();
+    this.logger.info('Executing usage profile', {
+      startDate: startDateIso,
+      endDate: endDateIso,
+      account: args.account,
+      group: args.group,
+      subscription: args.subscription,
+      groupBy,
+    });
 
-      const index = FIELD_CONSTANTS.index;
-      const timeField = FIELD_CONSTANTS.timeField;
-      const testVisitField = FIELD_CONSTANTS.testVisitField;
-      const accountField = FIELD_CONSTANTS.accountField;
-      const groupField = FIELD_CONSTANTS.groupField;
-      const subscriptionField = FIELD_CONSTANTS.subscriptionField;
-      const providerField = FIELD_CONSTANTS.providerField;
-      const patientField = FIELD_CONSTANTS.patientField;
-      const providerPlatformField = FIELD_CONSTANTS.providerPlatformField;
-      const patientPlatformField = FIELD_CONSTANTS.patientPlatformField;
-      const callDurationField = FIELD_CONSTANTS.callDurationField;
-      const providerRatingField = FIELD_CONSTANTS.providerRatingField;
-      const patientRatingField = FIELD_CONSTANTS.patientRatingField;
-      const meetingBasedField = FIELD_CONSTANTS.meetingBasedField;
+    const client = this.elasticsearch.getClient();
+    const index = FIELD_CONSTANTS.index;
+    const timeField = FIELD_CONSTANTS.timeField;
+    const accountField = FIELD_CONSTANTS.accountField;
+    const groupField = FIELD_CONSTANTS.groupField;
+    const subscriptionField = FIELD_CONSTANTS.subscriptionField;
+    const providerField = FIELD_CONSTANTS.providerField;
+    const patientField = FIELD_CONSTANTS.patientField;
+    const providerPlatformField = FIELD_CONSTANTS.providerPlatformField;
+    const patientPlatformField = FIELD_CONSTANTS.patientPlatformField;
+    const callDurationField = FIELD_CONSTANTS.callDurationField;
+    const providerRatingField = FIELD_CONSTANTS.providerRatingField;
+    const patientRatingField = FIELD_CONSTANTS.patientRatingField;
 
-      const filters: any[] = [
-        {
-          range: {
-            [timeField]: {
-              gte: startDate,
-              lt: endDate,
-            },
-          },
+    const filters = buildCommonFilters({
+      startDate: startDateIso,
+      endDate: endDateIso,
+      account: args.account,
+      group: args.group,
+      subscription: args.subscription,
+      excludeTestVisits: true
+    });
+
+    // Extra filters
+    filters.push({
+      bool: {
+        should: [
+          { exists: { field: callDurationField } },
+          { term: { [FIELD_CONSTANTS.meetingBasedField]: false } },
+        ],
+        minimum_should_match: 1,
+      },
+    });
+
+    const buildSummaryAggs = () => ({
+      total_visits: {
+        value_count: { field: timeField },
+      },
+      unique_accounts: {
+        cardinality: { field: accountField },
+      },
+      unique_groups: {
+        cardinality: { field: groupField },
+      },
+      unique_providers: {
+        cardinality: { field: providerField },
+      },
+      unique_patients: {
+        cardinality: { field: patientField },
+      },
+      avg_call_duration: {
+        avg: { field: callDurationField },
+      },
+      sum_call_duration: {
+        sum: { field: callDurationField },
+      },
+      provider_rating_count: {
+        value_count: { field: providerRatingField },
+      },
+      avg_provider_rating: {
+        avg: { field: providerRatingField },
+      },
+      patient_rating_count: {
+        value_count: { field: patientRatingField },
+      },
+      avg_patient_rating: {
+        avg: { field: patientRatingField },
+      },
+      subscription_distribution: {
+        terms: {
+          field: subscriptionField,
+          size: AGGREGATION_LIMITS.MEDIUM,
         },
-        {
-          term: {
-            [testVisitField]: 'No',
-          },
+      },
+      provider_platform_distribution: {
+        terms: {
+          field: providerPlatformField,
+          size: AGGREGATION_LIMITS.MEDIUM,
         },
-        {
+      },
+      patient_platform_distribution: {
+        terms: {
+          field: patientPlatformField,
+          size: AGGREGATION_LIMITS.MEDIUM,
+        },
+      },
+    });
+
+    let aggs: any;
+
+    if (groupBy === 'none') {
+      aggs = buildSummaryAggs();
+    } else {
+      let groupFieldName: string;
+      switch (groupBy) {
+        case 'subscription':
+          groupFieldName = subscriptionField;
+          break;
+        case 'account':
+          groupFieldName = accountField;
+          break;
+        case 'group':
+          groupFieldName = groupField;
+          break;
+        default:
+          groupFieldName = subscriptionField;
+      }
+
+      aggs = {
+        by_group: {
+          terms: {
+            field: groupFieldName,
+            size: AGGREGATION_LIMITS.MEDIUM, // Safeguard: cap at 50 to prevent data limits
+          },
+          aggs: buildSummaryAggs(),
+        },
+      };
+    }
+
+    const query = {
+      index,
+      size: 0,
+      body: {
+        query: {
           bool: {
-            should: [
-              { exists: { field: callDurationField } },
-              { term: { [meetingBasedField]: false } },
-            ],
-            minimum_should_match: 1,
+            filter: filters,
           },
         },
-      ];
+        aggs,
+      },
+    };
 
-      if (validatedArgs.account) {
-        filters.push({
-          term: {
-            [accountField]: validatedArgs.account,
-          },
-        });
-      }
+    this.logger.debug('Executing query', { query: JSON.stringify(query, null, 2) });
+    const response = await client.search(query);
+    const responseAggs = response.aggregations as any;
 
-      if (validatedArgs.group) {
-        filters.push({
-          term: {
-            [groupField]: validatedArgs.group,
-          },
-        });
-      }
+    const processSummaryItem = (itemAggs: any): UsageProfileItem => {
+      const totalVisits = itemAggs?.total_visits?.value || 0;
 
-      if (validatedArgs.subscription) {
-        filters.push({
-          term: {
-            [subscriptionField]: validatedArgs.subscription,
-          },
-        });
-      }
+      const subscriptionBuckets = itemAggs?.subscription_distribution?.buckets || [];
+      const subscriptionDistribution = subscriptionBuckets.map((bucket: any) => ({
+        subscription: bucket.key as string,
+        count: bucket.doc_count || 0,
+        percentage: totalVisits > 0 ? Math.round((bucket.doc_count / totalVisits) * 100 * 100) / 100 : 0,
+      }));
 
-      const buildSummaryAggs = () => ({
-        total_visits: {
-          value_count: { field: timeField },
-        },
-        unique_accounts: {
-          cardinality: { field: accountField },
-        },
-        unique_groups: {
-          cardinality: { field: groupField },
-        },
-        unique_providers: {
-          cardinality: { field: providerField },
-        },
-        unique_patients: {
-          cardinality: { field: patientField },
-        },
-        avg_call_duration: {
-          avg: { field: callDurationField },
-        },
-        sum_call_duration: {
-          sum: { field: callDurationField },
-        },
-        provider_rating_count: {
-          value_count: { field: providerRatingField },
-        },
-        avg_provider_rating: {
-          avg: { field: providerRatingField },
-        },
-        patient_rating_count: {
-          value_count: { field: patientRatingField },
-        },
-        avg_patient_rating: {
-          avg: { field: patientRatingField },
-        },
-        subscription_distribution: {
-          terms: {
-            field: subscriptionField,
-            size: AGGREGATION_LIMITS.MEDIUM,
-          },
-        },
-        provider_platform_distribution: {
-          terms: {
-            field: providerPlatformField,
-            size: AGGREGATION_LIMITS.MEDIUM,
-          },
-        },
-        patient_platform_distribution: {
-          terms: {
-            field: patientPlatformField,
-            size: AGGREGATION_LIMITS.MEDIUM,
-          },
-        },
-      });
+      const providerPlatformBuckets = itemAggs?.provider_platform_distribution?.buckets || [];
+      const providerPlatformDistribution = providerPlatformBuckets.map((bucket: any) => ({
+        platform: bucket.key as string,
+        count: bucket.doc_count || 0,
+        percentage: totalVisits > 0 ? Math.round((bucket.doc_count / totalVisits) * 100 * 100) / 100 : 0,
+      }));
 
-      let aggs: any;
+      const patientPlatformBuckets = itemAggs?.patient_platform_distribution?.buckets || [];
+      const patientPlatformDistribution = patientPlatformBuckets.map((bucket: any) => ({
+        platform: bucket.key as string,
+        count: bucket.doc_count || 0,
+        percentage: totalVisits > 0 ? Math.round((bucket.doc_count / totalVisits) * 100 * 100) / 100 : 0,
+      }));
 
-      if (groupBy === 'none') {
-        aggs = buildSummaryAggs();
-      } else {
-        let groupFieldName: string;
-        switch (groupBy) {
-          case 'subscription':
-            groupFieldName = subscriptionField;
-            break;
-          case 'account':
-            groupFieldName = accountField;
-            break;
-          case 'group':
-            groupFieldName = groupField;
-            break;
-          default:
-            groupFieldName = subscriptionField;
-        }
-
-        aggs = {
-          by_group: {
-            terms: {
-              field: groupFieldName,
-              size: AGGREGATION_LIMITS.MEDIUM, // Safeguard: cap at 50 to prevent data limits
-            },
-            aggs: buildSummaryAggs(),
-          },
-        };
-      }
-
-      const query = {
-        index,
-        size: 0,
-        body: {
-          query: {
-            bool: {
-              filter: filters,
-            },
-          },
-          aggs,
-        },
-      };
-
-      this.logger.debug('Executing query', { query: JSON.stringify(query, null, 2) });
-
-      const response = await client.search(query);
-      const responseAggs = response.aggregations as any;
-
-      const processSummaryItem = (itemAggs: any): UsageProfileItem => {
-        const totalVisits = itemAggs?.total_visits?.value || 0;
-
-        const subscriptionBuckets = itemAggs?.subscription_distribution?.buckets || [];
-        const subscriptionDistribution = subscriptionBuckets.map((bucket: any) => ({
-          subscription: bucket.key as string,
-          count: bucket.doc_count || 0,
-          percentage: totalVisits > 0 ? Math.round((bucket.doc_count / totalVisits) * 100 * 100) / 100 : 0,
-        }));
-
-        const providerPlatformBuckets = itemAggs?.provider_platform_distribution?.buckets || [];
-        const providerPlatformDistribution = providerPlatformBuckets.map((bucket: any) => ({
-          platform: bucket.key as string,
-          count: bucket.doc_count || 0,
-          percentage: totalVisits > 0 ? Math.round((bucket.doc_count / totalVisits) * 100 * 100) / 100 : 0,
-        }));
-
-        const patientPlatformBuckets = itemAggs?.patient_platform_distribution?.buckets || [];
-        const patientPlatformDistribution = patientPlatformBuckets.map((bucket: any) => ({
-          platform: bucket.key as string,
-          count: bucket.doc_count || 0,
-          percentage: totalVisits > 0 ? Math.round((bucket.doc_count / totalVisits) * 100 * 100) / 100 : 0,
-        }));
-
-        const avgCallDuration = itemAggs?.avg_call_duration?.value || null;
-        const sumCallDuration = itemAggs?.sum_call_duration?.value || null;
-        const totalCallDurationHours = sumCallDuration ? Math.round((sumCallDuration / 3600) * 100) / 100 : null;
-
-        return {
-          total_visits: totalVisits,
-          unique_accounts: itemAggs?.unique_accounts?.value || 0,
-          unique_groups: itemAggs?.unique_groups?.value || 0,
-          unique_providers: itemAggs?.unique_providers?.value || 0,
-          unique_patients: itemAggs?.unique_patients?.value || 0,
-          avg_call_duration_seconds: avgCallDuration ? Math.round(avgCallDuration * 100) / 100 : null,
-          total_call_duration_hours: totalCallDurationHours,
-          provider_rating_count: itemAggs?.provider_rating_count?.value || 0,
-          avg_provider_rating: itemAggs?.avg_provider_rating?.value ? Math.round(itemAggs.avg_provider_rating.value * 100) / 100 : null,
-          patient_rating_count: itemAggs?.patient_rating_count?.value || 0,
-          avg_patient_rating: itemAggs?.avg_patient_rating?.value ? Math.round(itemAggs.avg_patient_rating.value * 100) / 100 : null,
-          subscription_distribution: subscriptionDistribution,
-          provider_platform_distribution: providerPlatformDistribution,
-          patient_platform_distribution: patientPlatformDistribution,
-        };
-      };
-
-      let summary: UsageProfileItem | UsageProfileItem[];
-
-      if (groupBy === 'none') {
-        summary = processSummaryItem(responseAggs);
-      } else {
-        const valueKey = `${groupBy}_value`;
-        const groupBuckets = responseAggs?.by_group?.buckets || [];
-        summary = groupBuckets.map((bucket: any) => ({
-          [valueKey]: bucket.key as string,
-          ...processSummaryItem(bucket),
-        }));
-      }
-
-      this.logger.info('Successfully retrieved usage summary', {
-        groupBy,
-        itemCount: Array.isArray(summary) ? summary.length : 1,
-      });
+      const avgCallDuration = itemAggs?.avg_call_duration?.value || null;
+      const sumCallDuration = itemAggs?.sum_call_duration?.value || null;
+      const totalCallDurationHours = sumCallDuration ? Math.round((sumCallDuration / 3600) * 100) / 100 : null;
 
       return {
-        period: `${startDate} to ${endDate}`,
-        startDate,
-        endDate,
-        groupBy,
-        summary,
+        total_visits: totalVisits,
+        unique_accounts: itemAggs?.unique_accounts?.value || 0,
+        unique_groups: itemAggs?.unique_groups?.value || 0,
+        unique_providers: itemAggs?.unique_providers?.value || 0,
+        unique_patients: itemAggs?.unique_patients?.value || 0,
+        avg_call_duration_seconds: avgCallDuration ? Math.round(avgCallDuration * 100) / 100 : null,
+        total_call_duration_hours: totalCallDurationHours,
+        provider_rating_count: itemAggs?.provider_rating_count?.value || 0,
+        avg_provider_rating: itemAggs?.avg_provider_rating?.value ? Math.round(itemAggs.avg_provider_rating.value * 100) / 100 : null,
+        patient_rating_count: itemAggs?.patient_rating_count?.value || 0,
+        avg_patient_rating: itemAggs?.avg_patient_rating?.value ? Math.round(itemAggs.avg_patient_rating.value * 100) / 100 : null,
+        subscription_distribution: subscriptionDistribution,
+        provider_platform_distribution: providerPlatformDistribution,
+        patient_platform_distribution: patientPlatformDistribution,
       };
-    } catch (error) {
-      if (error instanceof Error && error.name === 'ZodError') {
-        throw new ValidationError('Invalid arguments for get_usage_summary', {
-          details: error.message,
-        });
-      }
+    };
 
-      if (error instanceof ValidationError) {
-        throw error;
-      }
+    let summary: UsageProfileItem[];
 
-      this.logger.error('Failed to get usage summary', {}, error as Error);
-      throw new ElasticsearchError('Failed to get usage profile', error as Error, { args });
+    if (groupBy === 'none') {
+      summary = [processSummaryItem(responseAggs)];
+    } else {
+      const valueKey = `${groupBy}_value`;
+      const groupBuckets = responseAggs?.by_group?.buckets || [];
+      summary = groupBuckets.map((bucket: any) => ({
+        [valueKey]: bucket.key as string,
+        ...processSummaryItem(bucket),
+      }));
     }
+
+    this.logger.info('Successfully retrieved usage summary', {
+      groupBy,
+      itemCount: summary.length,
+    });
+
+    return this.buildResponse(summary, {
+      description: `Usage profile from ${startDateIso} to ${endDateIso}${groupBy !== 'none' ? ` grouped by ${groupBy}` : ''}`,
+      arguments: args,
+      time: {
+        start: startDateIso,
+        end: endDateIso
+      },
+      visualization: {
+        type: 'table',
+        title: `Usage Profile${groupBy !== 'none' ? ` by ${groupBy}` : ''}`,
+        description: `${startDateIso.split('T')[0]} to ${endDateIso.split('T')[0]}`,
+      }
+    });
   }
 }
-

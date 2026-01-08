@@ -1,8 +1,8 @@
-import { ElasticsearchManager } from '../elasticsearch/client.js';
-import { Logger } from '../logger.js';
+import { BaseTool } from './base-tool.js';
 import { z } from 'zod';
-import { ValidationError, ElasticsearchError } from '../errors/handlers.js';
 import { FIELD_CONSTANTS } from '../utils/field-constants.js';
+import { buildCommonFilters } from '../utils/query-helpers.js';
+import { StandardResponse } from './types.js';
 
 const GetUsageLeaderboardArgsSchema = z.object({
     entityType: z.enum([
@@ -30,16 +30,7 @@ const GetUsageLeaderboardArgsSchema = z.object({
     path: ['entityValue']
 });
 
-export interface GetUsageLeaderboardArgs {
-    entityType: 'account' | 'group' | 'provider_platform' | 'patient_platform' | 'provider_platform_version' | 'patient_platform_version';
-    mode: 'top_n' | 'specific';
-    limit?: number;
-    entityValue?: string;
-    startDate?: string;
-    endDate?: string;
-    subscription?: string;
-    orderBy?: 'visit_count' | 'unique_accounts' | 'unique_groups' | 'unique_providers' | 'unique_patients';
-}
+export type GetUsageLeaderboardArgs = z.infer<typeof GetUsageLeaderboardArgsSchema>;
 
 export interface EntityUsageMetrics {
     entity: string;
@@ -53,157 +44,142 @@ export interface EntityUsageMetrics {
     avg_call_duration: number | null;
 }
 
-export interface GetUsageLeaderboardResult {
-    entityType: string;
-    mode: string;
-    startDate: string;
-    endDate: string;
-    orderBy: string;
-    results: EntityUsageMetrics[];
-}
+export type GetUsageLeaderboardResult = StandardResponse<EntityUsageMetrics[]>;
 
-export class GetUsageLeaderboardTool {
-    private elasticsearch: ElasticsearchManager;
-    private logger: Logger;
-
-    constructor(elasticsearch: ElasticsearchManager, logger: Logger) {
-        this.elasticsearch = elasticsearch;
-        this.logger = logger.child({ tool: 'get-usage-leaderboard' });
+export class GetUsageLeaderboardTool extends BaseTool<typeof GetUsageLeaderboardArgsSchema, GetUsageLeaderboardResult> {
+    constructor(elasticsearch: any, logger: any) {
+        super(elasticsearch, logger, 'get-usage-leaderboard');
     }
 
-    async execute(args: unknown): Promise<GetUsageLeaderboardResult> {
-        try {
-            const validatedArgs = GetUsageLeaderboardArgsSchema.parse(args);
-            const limit = validatedArgs.limit || 10;
-            const startDate = validatedArgs.startDate || 'now-30d';
-            const endDate = validatedArgs.endDate || 'now';
-            const orderBy = validatedArgs.orderBy || 'visit_count';
+    get schema() {
+        return GetUsageLeaderboardArgsSchema;
+    }
 
-            this.logger.info('Executing usage leaderboard', {
-                entityType: validatedArgs.entityType,
-                mode: validatedArgs.mode,
-                limit,
-                orderBy,
-                entityValue: validatedArgs.entityValue,
-            });
+    protected async run(args: GetUsageLeaderboardArgs): Promise<GetUsageLeaderboardResult> {
+        const limit = args.limit || 10;
+        const orderBy = args.orderBy || 'visit_count';
+        const { startIso: startDateIso, endIso: endDateIso } =
+            this.resolveTimeRange(args.startDate, args.endDate, 'now-30d', 'now');
 
-            const client = this.elasticsearch.getClient();
-            const index = FIELD_CONSTANTS.index;
-            const timeField = FIELD_CONSTANTS.timeField;
+        this.logger.info('Executing usage leaderboard', {
+            entityType: args.entityType,
+            mode: args.mode,
+            limit,
+            orderBy,
+            entityValue: args.entityValue,
+        });
 
-            // Determine field name based on entity type
-            let fieldName: string;
-            switch (validatedArgs.entityType) {
-                case 'account': fieldName = FIELD_CONSTANTS.accountField; break;
-                case 'group': fieldName = FIELD_CONSTANTS.groupField; break;
-                case 'provider_platform': fieldName = FIELD_CONSTANTS.providerPlatformField; break;
-                case 'patient_platform': fieldName = FIELD_CONSTANTS.patientPlatformField; break;
-                case 'provider_platform_version': fieldName = FIELD_CONSTANTS.providerPlatformVersionField; break;
-                case 'patient_platform_version': fieldName = FIELD_CONSTANTS.patientPlatformVersionField; break;
-                default: throw new Error(`Unknown entity type: ${validatedArgs.entityType}`);
-            }
+        const client = this.elasticsearch.getClient();
+        const index = FIELD_CONSTANTS.index;
+        const timeField = FIELD_CONSTANTS.timeField;
 
-            // Build filters
-            const filters: any[] = [
-                { range: { [timeField]: { gte: startDate, lt: endDate } } },
-                { term: { [FIELD_CONSTANTS.testVisitField]: 'No' } },
-                { exists: { field: fieldName } }, // Ensure entity field exists
-                { bool: { must_not: { term: { [fieldName]: '' } } } } // Exclude empty values
-            ];
+        // Determine field name based on entity type
+        let fieldName: string;
+        switch (args.entityType) {
+            case 'account': fieldName = FIELD_CONSTANTS.accountField; break;
+            case 'group': fieldName = FIELD_CONSTANTS.groupField; break;
+            case 'provider_platform': fieldName = FIELD_CONSTANTS.providerPlatformField; break;
+            case 'patient_platform': fieldName = FIELD_CONSTANTS.patientPlatformField; break;
+            case 'provider_platform_version': fieldName = FIELD_CONSTANTS.providerPlatformVersionField; break;
+            case 'patient_platform_version': fieldName = FIELD_CONSTANTS.patientPlatformVersionField; break;
+            default: throw new Error(`Unknown entity type: ${args.entityType}`);
+        }
 
-            if (validatedArgs.subscription) {
-                filters.push({ term: { [FIELD_CONSTANTS.subscriptionField]: validatedArgs.subscription } });
-            }
+        // Build filters using shared helper
+        const filters = buildCommonFilters({
+            startDate: startDateIso,
+            endDate: endDateIso,
+            subscription: args.subscription,
+            excludeTestVisits: true
+        });
 
-            // If specific mode, add specific filter
-            if (validatedArgs.mode === 'specific' && validatedArgs.entityValue) {
-                filters.push({ term: { [fieldName]: validatedArgs.entityValue } });
-            }
+        // Add tool-specific filters
+        filters.push({ exists: { field: fieldName } });
+        filters.push({ bool: { must_not: { term: { [fieldName]: '' } } } });
 
-            // Build Aggregations
-            const metricsAggs = {
-                total_visits: { value_count: { field: timeField } },
-                unique_accounts: { cardinality: { field: FIELD_CONSTANTS.accountField } },
-                unique_groups: { cardinality: { field: FIELD_CONSTANTS.groupField } },
-                unique_providers: { cardinality: { field: FIELD_CONSTANTS.providerField } },
-                unique_patients: { cardinality: { field: FIELD_CONSTANTS.patientField } },
-                avg_patient_rating: { avg: { field: FIELD_CONSTANTS.patientRatingField } },
-                avg_provider_rating: { avg: { field: FIELD_CONSTANTS.providerRatingField } },
-                avg_call_duration: { avg: { field: FIELD_CONSTANTS.callDurationField } }
-            };
+        // If specific mode, add specific filter
+        if (args.mode === 'specific' && args.entityValue) {
+            filters.push({ term: { [fieldName]: args.entityValue } });
+        }
 
-            let order: Record<string, 'asc' | 'desc'>;
-            if (orderBy === 'visit_count') {
-                order = { _count: 'desc' };
-            } else {
-                // Sort by the sub-aggregation (metricsAggs keys)
-                // For 'visit_count' we could also use 'total_visits' but _count is more standard/efficient for doc count
-                // For distinct counts, use the metric name directly
-                order = { [orderBy]: 'desc' };
-            }
+        // Build Aggregations
+        const metricsAggs = {
+            total_visits: { value_count: { field: timeField } },
+            unique_accounts: { cardinality: { field: FIELD_CONSTANTS.accountField } },
+            unique_groups: { cardinality: { field: FIELD_CONSTANTS.groupField } },
+            unique_providers: { cardinality: { field: FIELD_CONSTANTS.providerField } },
+            unique_patients: { cardinality: { field: FIELD_CONSTANTS.patientField } },
+            avg_patient_rating: { avg: { field: FIELD_CONSTANTS.patientRatingField } },
+            avg_provider_rating: { avg: { field: FIELD_CONSTANTS.providerRatingField } },
+            avg_call_duration: { avg: { field: FIELD_CONSTANTS.callDurationField } }
+        };
 
-            let aggs: any;
-            if (validatedArgs.mode === 'specific') {
-                // For specific mode, we can just aggregate at the top level, 
-                // BUT to keep return format consistent, let's group by the term (which will be just one bucket)
-                aggs = {
-                    by_entity: {
-                        terms: { field: fieldName, size: 1 },
-                        aggs: metricsAggs
-                    }
-                };
-            } else {
-                // Top N
-                aggs = {
-                    by_entity: {
-                        terms: {
-                            field: fieldName,
-                            size: limit,
-                            order: order
-                        },
-                        aggs: metricsAggs
-                    }
-                };
-            }
+        let order: Record<string, 'asc' | 'desc'>;
+        if (orderBy === 'visit_count') {
+            order = { _count: 'desc' };
+        } else {
+            order = { [orderBy]: 'desc' };
+        }
 
-            const query = {
-                index,
-                size: 0,
-                body: {
-                    query: { bool: { filter: filters } },
-                    aggs
+        let aggs: any;
+        if (args.mode === 'specific') {
+            aggs = {
+                by_entity: {
+                    terms: { field: fieldName, size: 1 },
+                    aggs: metricsAggs
                 }
             };
-
-            const response = await client.search(query);
-            const buckets = (response.aggregations as any)?.by_entity?.buckets || [];
-
-            const results: EntityUsageMetrics[] = buckets.map((bucket: any) => ({
-                entity: bucket.key,
-                total_visits: bucket.doc_count,
-                unique_accounts: bucket.unique_accounts.value,
-                unique_groups: bucket.unique_groups.value,
-                unique_providers: bucket.unique_providers.value,
-                unique_patients: bucket.unique_patients.value,
-                avg_patient_rating: bucket.avg_patient_rating.value ? Math.round(bucket.avg_patient_rating.value * 100) / 100 : null,
-                avg_provider_rating: bucket.avg_provider_rating.value ? Math.round(bucket.avg_provider_rating.value * 100) / 100 : null,
-                avg_call_duration: bucket.avg_call_duration.value ? Math.round(bucket.avg_call_duration.value * 100) / 100 : null,
-            }));
-
-            return {
-                entityType: validatedArgs.entityType,
-                mode: validatedArgs.mode,
-                startDate,
-                endDate,
-                orderBy,
-                results
+        } else {
+            aggs = {
+                by_entity: {
+                    terms: {
+                        field: fieldName,
+                        size: limit,
+                        order: order
+                    },
+                    aggs: metricsAggs
+                }
             };
-
-        } catch (error) {
-            if (error instanceof Error && error.name === 'ZodError') {
-                throw new ValidationError('Invalid arguments', { details: error.message });
-            }
-            throw new ElasticsearchError('Failed to get usage leaderboard', error as Error, { args });
         }
+
+        const query = {
+            index,
+            size: 0,
+            body: {
+                query: { bool: { filter: filters } },
+                aggs
+            }
+        };
+
+        const response = await client.search(query);
+        const buckets = (response.aggregations as any)?.by_entity?.buckets || [];
+
+        const results: EntityUsageMetrics[] = buckets.map((bucket: any) => ({
+            entity: bucket.key,
+            total_visits: bucket.doc_count,
+            unique_accounts: bucket.unique_accounts.value,
+            unique_groups: bucket.unique_groups.value,
+            unique_providers: bucket.unique_providers.value,
+            unique_patients: bucket.unique_patients.value,
+            avg_patient_rating: bucket.avg_patient_rating.value ? Math.round(bucket.avg_patient_rating.value * 100) / 100 : null,
+            avg_provider_rating: bucket.avg_provider_rating.value ? Math.round(bucket.avg_provider_rating.value * 100) / 100 : null,
+            avg_call_duration: bucket.avg_call_duration.value ? Math.round(bucket.avg_call_duration.value * 100) / 100 : null,
+        }));
+
+        return this.buildResponse(results, {
+            description: `${args.mode === 'top_n' ? `Top ${limit}` : 'Specific'} ${args.entityType} by ${orderBy} from ${startDateIso} to ${endDateIso}`,
+            arguments: args,
+            time: {
+                start: startDateIso,
+                end: endDateIso
+            },
+            visualization: {
+                type: 'table',
+                title: `${args.mode === 'top_n' ? `Top ${limit}` : 'Specific'} ${args.entityType} Usage`,
+                description: `${startDateIso.split('T')[0]} to ${endDateIso.split('T')[0]}`,
+                xAxisLabel: args.entityType,
+                yAxisLabel: orderBy
+            }
+        });
     }
 }

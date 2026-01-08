@@ -1,9 +1,9 @@
-import { ElasticsearchManager } from '../elasticsearch/client.js';
-import { Logger } from '../logger.js';
+import { BaseTool } from './base-tool.js';
 import { z } from 'zod';
-import { ValidationError, ElasticsearchError } from '../errors/handlers.js';
+import { ValidationError } from '../errors/handlers.js';
 import { AGGREGATION_LIMITS, calculateTermsSize } from '../utils/aggregation-limits.js';
 import { FIELD_CONSTANTS } from '../utils/field-constants.js';
+import { StandardResponse } from './types.js';
 
 const MetricFilterSchema = z.object({
   metric: z.enum(['account_count', 'visit_count', 'provider_rating', 'patient_rating', 'avg_call_duration', 'unique_providers', 'unique_patients', 'provider_rating_count', 'patient_rating_count']),
@@ -34,7 +34,7 @@ const FindEntitiesByMetricArgsSchema = z.object({
     // Either use single metric (for backward compatibility) or metrics array, but not both
     const hasSingleMetric = data.metric !== undefined;
     const hasMetricsArray = data.metrics !== undefined && data.metrics.length > 0;
-    
+
     if (!hasSingleMetric && !hasMetricsArray) {
       return false;
     }
@@ -61,7 +61,7 @@ const FindEntitiesByMetricArgsSchema = z.object({
   (data) => {
     // Validate entityType and metrics compatibility
     const metricsToCheck = data.metrics || (data.metric ? [{ metric: data.metric }] : []);
-    
+
     for (const metricFilter of metricsToCheck) {
       const metric = metricFilter.metric;
       if (data.entityType === 'group' && metric === 'account_count') {
@@ -85,18 +85,7 @@ export interface MetricFilter {
   max?: number;
 }
 
-export interface FindEntitiesByMetricArgs {
-  entityType: 'group' | 'account';
-  metric?: 'account_count' | 'visit_count' | 'provider_rating' | 'patient_rating' | 'avg_call_duration' | 'unique_providers' | 'unique_patients' | 'provider_rating_count' | 'patient_rating_count';
-  min?: number;
-  max?: number;
-  metrics?: MetricFilter[];
-  startDate?: string;
-  endDate?: string;
-  subscription?: 'Enterprise' | 'Premium' | 'FVC' | 'BVC' | 'Plus';
-  group?: string;
-  limit?: number;
-}
+export type FindEntitiesByMetricArgs = z.infer<typeof FindEntitiesByMetricArgsSchema>;
 
 export interface EntityMetricResult {
   entity: string;
@@ -112,357 +101,338 @@ export interface EntityMetricResult {
   patient_rating_count?: number;
 }
 
-export interface FindEntitiesByMetricResult {
-  startDate: string;
-  endDate: string;
+export type FindEntitiesByMetricResult = StandardResponse<{
   entityType: string;
-  metric: string; // For backward compatibility
+  metric: string;
   min?: number;
   max?: number;
-  metrics?: MetricFilter[]; // Array of metrics used for filtering
-  period: string;
+  metrics?: MetricFilter[];
   results: EntityMetricResult[];
   total_found: number;
-}
+}>;
 
-export class FindEntitiesByMetricTool {
-  private elasticsearch: ElasticsearchManager;
-  private logger: Logger;
-
-  constructor(elasticsearch: ElasticsearchManager, logger: Logger) {
-    this.elasticsearch = elasticsearch;
-    this.logger = logger.child({ tool: 'find-entities-by-metric' });
+export class FindEntitiesByMetricTool extends BaseTool<typeof FindEntitiesByMetricArgsSchema, FindEntitiesByMetricResult> {
+  constructor(elasticsearch: any, logger: any) {
+    super(elasticsearch, logger, 'find_entities_by_metric');
   }
 
-  async execute(args: unknown): Promise<FindEntitiesByMetricResult> {
-    try {
-      const validatedArgs = FindEntitiesByMetricArgsSchema.parse(args);
-      let startDate = validatedArgs.startDate || 'now-1y';
-      let endDate = validatedArgs.endDate || 'now';
-      
-      // Safeguard: cap limit at 500
-      const limit = Math.min(validatedArgs.limit || 500);
+  get schema() {
+    return FindEntitiesByMetricArgsSchema;
+  }
 
-      // Normalize to metrics array (for backward compatibility with single metric)
-      const metricsToCompute: MetricFilter[] = validatedArgs.metrics || (validatedArgs.metric ? [{
-        metric: validatedArgs.metric,
-        min: validatedArgs.min,
-        max: validatedArgs.max,
-      }] : []);
+  protected async run(args: FindEntitiesByMetricArgs): Promise<FindEntitiesByMetricResult> {
+    const { startIso: startDateIso, endIso: endDateIso, start: startDate, end: endDate } =
+      this.resolveTimeRange(args.startDate, args.endDate, 'now-1y', 'now');
 
-      this.logger.info('Finding entities by metric', {
-        entityType: validatedArgs.entityType,
-        metricsCount: metricsToCompute.length,
-        metrics: metricsToCompute.map(m => m.metric),
-        startDate,
-        endDate,
-        subscription: validatedArgs.subscription,
-        group: validatedArgs.group,
-        limit,
-        originalLimit: validatedArgs.limit,
+    // Safeguard: cap limit at 500
+    const limit = Math.min(args.limit || 500);
+
+    // Normalize to metrics array (for backward compatibility with single metric)
+    const metricsToCompute: MetricFilter[] = args.metrics || (args.metric ? [{
+      metric: args.metric,
+      min: args.min,
+      max: args.max,
+    }] : []);
+
+    this.logger.info('Finding entities by metric', {
+      entityType: args.entityType,
+      metricsCount: metricsToCompute.length,
+      metrics: metricsToCompute.map(m => m.metric),
+      startDate,
+      endDate,
+      subscription: args.subscription,
+      group: args.group,
+      limit,
+      originalLimit: args.limit,
+    });
+
+    const client = this.elasticsearch.getClient();
+
+    const index = FIELD_CONSTANTS.index;
+    const timeField = FIELD_CONSTANTS.timeField;
+    const testVisitField = FIELD_CONSTANTS.testVisitField;
+    const accountField = FIELD_CONSTANTS.accountField;
+    const groupField = FIELD_CONSTANTS.groupField;
+    const subscriptionField = FIELD_CONSTANTS.subscriptionField;
+    const providerField = FIELD_CONSTANTS.providerField;
+    const patientField = FIELD_CONSTANTS.patientField;
+    const providerRatingField = FIELD_CONSTANTS.providerRatingField;
+    const patientRatingField = FIELD_CONSTANTS.patientRatingField;
+    const callDurationField = FIELD_CONSTANTS.callDurationField;
+    const meetingBasedField = FIELD_CONSTANTS.meetingBasedField;
+
+    const filters: any[] = [
+      {
+        range: {
+          [timeField]: {
+            gte: startDate,
+            lt: endDate,
+          },
+        },
+      },
+      {
+        term: {
+          [testVisitField]: 'No',
+        },
+      },
+      {
+        bool: {
+          should: [
+            { exists: { field: callDurationField } },
+            { term: { [meetingBasedField]: false } },
+          ],
+          minimum_should_match: 1,
+        },
+      },
+    ];
+
+    if (args.subscription) {
+      filters.push({
+        term: {
+          [subscriptionField]: args.subscription,
+        },
       });
+    }
 
-      const client = this.elasticsearch.getClient();
-
-      const index = FIELD_CONSTANTS.index;
-      const timeField = FIELD_CONSTANTS.timeField;
-      const testVisitField = FIELD_CONSTANTS.testVisitField;
-      const accountField = FIELD_CONSTANTS.accountField;
-      const groupField = FIELD_CONSTANTS.groupField;
-      const subscriptionField = FIELD_CONSTANTS.subscriptionField;
-      const providerField = FIELD_CONSTANTS.providerField;
-      const patientField = FIELD_CONSTANTS.patientField;
-      const providerRatingField = FIELD_CONSTANTS.providerRatingField;
-      const patientRatingField = FIELD_CONSTANTS.patientRatingField;
-      const callDurationField = FIELD_CONSTANTS.callDurationField;
-      const meetingBasedField = FIELD_CONSTANTS.meetingBasedField;
-
-      const filters: any[] = [
-        {
-          range: {
-            [timeField]: {
-              gte: startDate,
-              lt: endDate,
-            },
-          },
-        },
-        {
-          term: {
-            [testVisitField]: 'No',
-          },
-        },
-        {
-          bool: {
-            should: [
-              { exists: { field: callDurationField } },
-              { term: { [meetingBasedField]: false } },
-            ],
-            minimum_should_match: 1,
-          },
-        },
-      ];
-
-      if (validatedArgs.subscription) {
-        filters.push({
-          term: {
-            [subscriptionField]: validatedArgs.subscription,
-          },
-        });
+    if (args.group) {
+      if (args.entityType !== 'account') {
+        // This should be caught by BaseTool/Zod really, but logic exists here
+        throw new ValidationError('group filter can only be used when entityType="account"');
       }
+      filters.push({
+        term: {
+          [groupField]: args.group,
+        },
+      });
+    }
 
-      if (validatedArgs.group) {
-        if (validatedArgs.entityType !== 'account') {
-          throw new ValidationError('group filter can only be used when entityType="account"');
-        }
-        filters.push({
-          term: {
-            [groupField]: validatedArgs.group,
-          },
-        });
-      }
+    const groupingField = args.entityType === 'group' ? groupField : accountField;
+    const aggregationName = args.entityType === 'group' ? 'by_group' : 'by_account';
 
-      const groupingField = validatedArgs.entityType === 'group' ? groupField : accountField;
-      const aggregationName = validatedArgs.entityType === 'group' ? 'by_group' : 'by_account';
+    const metricAggs: Record<string, any> = {};
 
-      const metricAggs: Record<string, any> = {};
-      
-      for (const metricFilter of metricsToCompute) {
-        const metric = metricFilter.metric;
-        
-        if (metric === 'account_count') {
-          metricAggs.unique_accounts = {
-            cardinality: { field: accountField },
-          };
-        } else if (metric === 'visit_count') {
-          metricAggs.visit_count = {
-            value_count: { field: timeField },
-          };
-        } else if (metric === 'provider_rating') {
-          metricAggs.avg_provider_rating = {
-            avg: { field: providerRatingField },
-          };
-        } else if (metric === 'patient_rating') {
-          metricAggs.avg_patient_rating = {
-            avg: { field: patientRatingField },
-          };
-        } else if (metric === 'avg_call_duration') {
-          metricAggs.avg_call_duration = {
-            avg: { field: callDurationField },
-          };
-        } else if (metric === 'unique_providers') {
-          metricAggs.unique_providers = {
-            cardinality: { field: providerField },
-          };
-        } else if (metric === 'unique_patients') {
-          metricAggs.unique_patients = {
-            cardinality: { field: patientField },
-          };
-        } else if (metric === 'provider_rating_count') {
-          metricAggs.provider_rating_count = {
-            value_count: { field: providerRatingField },
-          };
-        } else if (metric === 'patient_rating_count') {
-          metricAggs.patient_rating_count = {
-            value_count: { field: patientRatingField },
-          };
-        }
-      }
+    for (const metricFilter of metricsToCompute) {
+      const metric = metricFilter.metric;
 
-      if (!metricAggs.visit_count) {
+      if (metric === 'account_count') {
+        metricAggs.unique_accounts = {
+          cardinality: { field: accountField },
+        };
+      } else if (metric === 'visit_count') {
         metricAggs.visit_count = {
           value_count: { field: timeField },
         };
+      } else if (metric === 'provider_rating') {
+        metricAggs.avg_provider_rating = {
+          avg: { field: providerRatingField },
+        };
+      } else if (metric === 'patient_rating') {
+        metricAggs.avg_patient_rating = {
+          avg: { field: patientRatingField },
+        };
+      } else if (metric === 'avg_call_duration') {
+        metricAggs.avg_call_duration = {
+          avg: { field: callDurationField },
+        };
+      } else if (metric === 'unique_providers') {
+        metricAggs.unique_providers = {
+          cardinality: { field: providerField },
+        };
+      } else if (metric === 'unique_patients') {
+        metricAggs.unique_patients = {
+          cardinality: { field: patientField },
+        };
+      } else if (metric === 'provider_rating_count') {
+        metricAggs.provider_rating_count = {
+          value_count: { field: providerRatingField },
+        };
+      } else if (metric === 'patient_rating_count') {
+        metricAggs.patient_rating_count = {
+          value_count: { field: patientRatingField },
+        };
       }
-
-      const aggs: any = {
-        [aggregationName]: {
-          terms: {
-            field: groupingField,
-            size: calculateTermsSize(limit, 3, AGGREGATION_LIMITS.MAX), // Safeguard: Get more to account for filtering
-          },
-          aggs: metricAggs,
-        },
-      };
-
-      const query = {
-        index,
-        size: 0,
-        body: {
-          track_total_hits: false,
-          query: {
-            bool: {
-              filter: filters,
-            },
-          },
-          aggs,
-        },
-      };
-
-      this.logger.debug('Executing query', { query: JSON.stringify(query, null, 2) });
-
-      const response = await client.search(query);
-      const responseAggs = response.aggregations as any;
-
-      const buckets = responseAggs?.[aggregationName]?.buckets || [];
-
-      const getMetricValueFromBucket = (bucket: any, metric: string): number | null => {
-        switch (metric) {
-          case 'account_count':
-            return bucket.unique_accounts?.value ?? null;
-          case 'visit_count':
-            return bucket.visit_count?.value ?? null;
-          case 'provider_rating':
-            return bucket.avg_provider_rating?.value ?? null;
-          case 'patient_rating':
-            return bucket.avg_patient_rating?.value ?? null;
-          case 'avg_call_duration':
-            return bucket.avg_call_duration?.value ?? null;
-          case 'unique_providers':
-            return bucket.unique_providers?.value ?? null;
-          case 'unique_patients':
-            return bucket.unique_patients?.value ?? null;
-          case 'provider_rating_count':
-            return bucket.provider_rating_count?.value ?? null;
-          case 'patient_rating_count':
-            return bucket.patient_rating_count?.value ?? null;
-          default:
-            return null;
-        }
-      };
-
-      const results: EntityMetricResult[] = buckets
-        .map((bucket: any) => {
-          const entity = bucket.key as string;
-          
-          const metricValues: Record<string, number | null> = {};
-          for (const metricFilter of metricsToCompute) {
-            const value = getMetricValueFromBucket(bucket, metricFilter.metric);
-            metricValues[metricFilter.metric] = value;
-          }
-          
-          const visitCount = bucket.visit_count?.value || 0;
-
-          const result: EntityMetricResult = {
-            entity,
-            metric_value: 0, // Will be set based on first metric
-            visit_count: Math.round(visitCount),
-          };
-
-          if (metricValues.account_count !== null) {
-            result.account_count = Math.round(metricValues.account_count);
-          }
-          if (metricValues.provider_rating !== null) {
-            result.provider_rating = Math.round(metricValues.provider_rating * 100) / 100;
-          }
-          if (metricValues.patient_rating !== null) {
-            result.patient_rating = Math.round(metricValues.patient_rating * 100) / 100;
-          }
-          if (metricValues.avg_call_duration !== null) {
-            result.avg_call_duration = Math.round(metricValues.avg_call_duration * 100) / 100;
-          }
-          if (metricValues.unique_providers !== null) {
-            result.unique_providers = Math.round(metricValues.unique_providers);
-          }
-          if (metricValues.unique_patients !== null) {
-            result.unique_patients = Math.round(metricValues.unique_patients);
-          }
-          if (metricValues.provider_rating_count !== null) {
-            result.provider_rating_count = Math.round(metricValues.provider_rating_count);
-          }
-          if (metricValues.patient_rating_count !== null) {
-            result.patient_rating_count = Math.round(metricValues.patient_rating_count);
-          }
-
-          const firstMetric = metricsToCompute[0]?.metric;
-          if (firstMetric && metricValues[firstMetric] !== null) {
-            const value = metricValues[firstMetric]!;
-            result.metric_value = (firstMetric === 'visit_count' || firstMetric === 'account_count' || 
-                                   firstMetric === 'unique_providers' || firstMetric === 'unique_patients' ||
-                                   firstMetric === 'provider_rating_count' || firstMetric === 'patient_rating_count')
-              ? Math.round(value)
-              : Math.round(value * 100) / 100;
-          } else {
-            result.metric_value = visitCount;
-          }
-
-          return { result, metricValues };
-        })
-        .filter(({ metricValues }: { metricValues: Record<string, number | null> }) => {
-          for (const metricFilter of metricsToCompute) {
-            const value = metricValues[metricFilter.metric];
-            if (value === null || value === undefined) {
-              return false; // Skip if metric value is missing
-            }
-            
-            if (metricFilter.min !== undefined && value < metricFilter.min) {
-              return false;
-            }
-            if (metricFilter.max !== undefined && value > metricFilter.max) {
-              return false;
-            }
-          }
-          return true;
-        })
-        .map(({ result }: { result: EntityMetricResult }) => result);
-
-      const firstMetric = metricsToCompute[0]?.metric;
-      const isCountMetric = firstMetric === 'account_count' || firstMetric === 'visit_count' || 
-                            firstMetric === 'unique_providers' || firstMetric === 'unique_patients' ||
-                            firstMetric === 'provider_rating_count' || firstMetric === 'patient_rating_count';
-      
-      results.sort((a, b) => {
-        if (isCountMetric) {
-          return b.metric_value - a.metric_value; // Descending for counts (highest first)
-        } else {
-          return a.metric_value - b.metric_value; // Ascending for ratings (lowest/worst first)
-        }
-      });
-
-      const limitedResults = results.slice(0, limit);
-
-      this.logger.info('Successfully found entities by metric', {
-        entityType: validatedArgs.entityType,
-        metricsCount: metricsToCompute.length,
-        totalFound: limitedResults.length,
-      });
-
-      return {
-        startDate,
-        endDate,
-        entityType: validatedArgs.entityType,
-        metric: validatedArgs.metric || metricsToCompute.map(m => m.metric).join(','), // For backward compatibility
-        min: validatedArgs.min,
-        max: validatedArgs.max,
-        metrics: metricsToCompute, // Include metrics array in response
-        period: `${startDate} to ${endDate}`,
-        total_found: limitedResults.length,
-        results: limitedResults,
-      };
-    } catch (error) {
-      if (error instanceof Error && error.name === 'ZodError') {
-        throw new ValidationError('Invalid arguments for find_entities_by_metric', {
-          details: error.message,
-        });
-      }
-
-      if (error instanceof ValidationError) {
-        throw error;
-      }
-
-      this.logger.error('Failed to find entities by metric', {}, error as Error);
-      
-      // Check if this is a ResponseError from Elasticsearch client
-      if (error && typeof error === 'object' && 'body' in error) {
-        throw ElasticsearchError.fromResponseError(error, 'find_entities_by_metric', args);
-      }
-      
-      throw new ElasticsearchError(
-        'Failed to find entities by metric in Elasticsearch',
-        error as Error,
-        { args }
-      );
     }
+
+    if (!metricAggs.visit_count) {
+      metricAggs.visit_count = {
+        value_count: { field: timeField },
+      };
+    }
+
+    const aggs: any = {
+      [aggregationName]: {
+        terms: {
+          field: groupingField,
+          size: calculateTermsSize(limit, 3, AGGREGATION_LIMITS.MAX), // Safeguard: Get more to account for filtering
+        },
+        aggs: metricAggs,
+      },
+    };
+
+    const query = {
+      index,
+      size: 0,
+      body: {
+        track_total_hits: false,
+        query: {
+          bool: {
+            filter: filters,
+          },
+        },
+        aggs,
+      },
+    };
+
+    this.logger.debug('Executing query', { query: JSON.stringify(query, null, 2) });
+
+    const response = await client.search(query);
+    const responseAggs = response.aggregations as any;
+
+    const buckets = responseAggs?.[aggregationName]?.buckets || [];
+
+    const getMetricValueFromBucket = (bucket: any, metric: string): number | null => {
+      switch (metric) {
+        case 'account_count':
+          return bucket.unique_accounts?.value ?? null;
+        case 'visit_count':
+          return bucket.visit_count?.value ?? null;
+        case 'provider_rating':
+          return bucket.avg_provider_rating?.value ?? null;
+        case 'patient_rating':
+          return bucket.avg_patient_rating?.value ?? null;
+        case 'avg_call_duration':
+          return bucket.avg_call_duration?.value ?? null;
+        case 'unique_providers':
+          return bucket.unique_providers?.value ?? null;
+        case 'unique_patients':
+          return bucket.unique_patients?.value ?? null;
+        case 'provider_rating_count':
+          return bucket.provider_rating_count?.value ?? null;
+        case 'patient_rating_count':
+          return bucket.patient_rating_count?.value ?? null;
+        default:
+          return null;
+      }
+    };
+
+    const results: EntityMetricResult[] = buckets
+      .map((bucket: any) => {
+        const entity = bucket.key as string;
+
+        const metricValues: Record<string, number | null> = {};
+        for (const metricFilter of metricsToCompute) {
+          const value = getMetricValueFromBucket(bucket, metricFilter.metric);
+          metricValues[metricFilter.metric] = value;
+        }
+
+        const visitCount = bucket.visit_count?.value || 0;
+
+        const result: EntityMetricResult = {
+          entity,
+          metric_value: 0, // Will be set based on first metric
+          visit_count: Math.round(visitCount),
+        };
+
+        if (metricValues.account_count !== null) {
+          result.account_count = Math.round(metricValues.account_count);
+        }
+        if (metricValues.provider_rating !== null) {
+          result.provider_rating = Math.round(metricValues.provider_rating * 100) / 100;
+        }
+        if (metricValues.patient_rating !== null) {
+          result.patient_rating = Math.round(metricValues.patient_rating * 100) / 100;
+        }
+        if (metricValues.avg_call_duration !== null) {
+          result.avg_call_duration = Math.round(metricValues.avg_call_duration * 100) / 100;
+        }
+        if (metricValues.unique_providers !== null) {
+          result.unique_providers = Math.round(metricValues.unique_providers);
+        }
+        if (metricValues.unique_patients !== null) {
+          result.unique_patients = Math.round(metricValues.unique_patients);
+        }
+        if (metricValues.provider_rating_count !== null) {
+          result.provider_rating_count = Math.round(metricValues.provider_rating_count);
+        }
+        if (metricValues.patient_rating_count !== null) {
+          result.patient_rating_count = Math.round(metricValues.patient_rating_count);
+        }
+
+        const firstMetric = metricsToCompute[0]?.metric;
+        if (firstMetric && metricValues[firstMetric] !== null) {
+          const value = metricValues[firstMetric]!;
+          result.metric_value = (firstMetric === 'visit_count' || firstMetric === 'account_count' ||
+            firstMetric === 'unique_providers' || firstMetric === 'unique_patients' ||
+            firstMetric === 'provider_rating_count' || firstMetric === 'patient_rating_count')
+            ? Math.round(value)
+            : Math.round(value * 100) / 100;
+        } else {
+          result.metric_value = visitCount;
+        }
+
+        return { result, metricValues };
+      })
+      .filter(({ metricValues }: { metricValues: Record<string, number | null> }) => {
+        for (const metricFilter of metricsToCompute) {
+          const value = metricValues[metricFilter.metric];
+          if (value === null || value === undefined) {
+            return false; // Skip if metric value is missing
+          }
+
+          if (metricFilter.min !== undefined && value < metricFilter.min) {
+            return false;
+          }
+          if (metricFilter.max !== undefined && value > metricFilter.max) {
+            return false;
+          }
+        }
+        return true;
+      })
+      .map(({ result }: { result: EntityMetricResult }) => result);
+
+    const firstMetric = metricsToCompute[0]?.metric;
+    const isCountMetric = firstMetric === 'account_count' || firstMetric === 'visit_count' ||
+      firstMetric === 'unique_providers' || firstMetric === 'unique_patients' ||
+      firstMetric === 'provider_rating_count' || firstMetric === 'patient_rating_count';
+
+    results.sort((a, b) => {
+      if (isCountMetric) {
+        return b.metric_value - a.metric_value; // Descending for counts (highest first)
+      } else {
+        return a.metric_value - b.metric_value; // Ascending for ratings (lowest/worst first)
+      }
+    });
+
+    const limitedResults = results.slice(0, limit);
+
+    this.logger.info('Successfully found entities by metric', {
+      entityType: args.entityType,
+      metricsCount: metricsToCompute.length,
+      totalFound: limitedResults.length,
+    });
+
+    return this.buildResponse({
+      entityType: args.entityType,
+      metric: args.metric || metricsToCompute.map(m => m.metric).join(','),
+      min: args.min,
+      max: args.max,
+      metrics: metricsToCompute,
+      total_found: limitedResults.length,
+      results: limitedResults
+    }, {
+      description: `Found ${limitedResults.length} ${args.entityType}s by metric(s) from ${startDateIso} to ${endDateIso}`,
+      arguments: args,
+      time: {
+        start: startDateIso,
+        end: endDateIso
+      },
+      visualization: {
+        type: 'table',
+        title: `Entities by Metric (${args.entityType})`,
+        description: `${startDateIso.split('T')[0]} to ${endDateIso.split('T')[0]}`,
+        xAxisLabel: args.entityType,
+        yAxisLabel: 'Metric Value'
+      }
+    });
   }
-
 }
-
