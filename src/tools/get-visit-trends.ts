@@ -6,8 +6,8 @@ import { StandardResponse } from './types.js';
 import { AGGREGATION_LIMITS } from '../utils/aggregation-limits.js';
 
 const GetVisitTrendsArgsSchema = z.object({
-  interval: z.enum(['daily', 'weekly', 'monthly', 'yearly']).default('weekly').describe('Time interval for trends: "daily", "weekly", "monthly", or "yearly" (default: weekly)'),
-  startDate: z.string().optional().describe('Start date in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d" (1 month)'),
+  interval: z.enum(['daily', 'weekly', 'monthly', 'yearly']).optional().describe('Time interval for trends: "daily", "weekly", "monthly", or "yearly". Defaults depend on query context (e.g. daily -> 7d, weekly -> 1M)'),
+  startDate: z.string().optional().describe('Start date in ISO format or date math. Defaults depend on interval (e.g. daily -> now-7d, weekly -> now-1M)'),
   endDate: z.string().optional().describe('End date in ISO format (YYYY-MM-DD) or date math (e.g., "now"). Defaults to "now"'),
   groupBy: z.enum(['none', 'subscription', 'account', 'group']).optional().default('none').describe('Optional grouping dimension (default: none)'),
   account: z.string().optional().describe('Optional account name to filter by'),
@@ -45,11 +45,62 @@ export class GetVisitTrendsTool extends BaseTool<typeof GetVisitTrendsArgsSchema
   }
 
   protected async run(args: GetVisitTrendsArgs): Promise<VisitTrendsResult> {
-    const interval = args.interval || 'weekly';
     const groupBy = args.groupBy || 'none';
+    let interval = args.interval;
+    let startDate = args.startDate;
+    const endDate = args.endDate || 'now';
 
+    // Logic: If interval is provided but no startDate, derive startDate
+    if (interval && !startDate) {
+      switch (interval) {
+        case 'daily':
+          startDate = 'now-7d';
+          break;
+        case 'weekly':
+          startDate = 'now-1M';
+          break;
+        case 'monthly':
+          startDate = 'now-3M'; // User requested defaulting logic
+          break;
+        case 'yearly':
+          startDate = 'now-3y';
+          break;
+      }
+    }
+    // Logic: If startDate is provided (or we just defaulted it?) but no interval, derive interval
+    // Actually, if we just defaulted startDate above, we have interval.
+    // So this else if applies when interval is UNDEFINED.
+    else if (!interval) {
+      // If no startDate either, apply global defaults
+      if (!startDate) {
+        interval = 'weekly';
+        startDate = 'now-1M';
+      } else {
+        // We have startDate, but no interval. Derive interval from duration.
+        const { startIso, endIso } = this.resolveTimeRange(startDate, endDate);
+        const startMs = new Date(startIso).getTime();
+        const endMs = new Date(endIso).getTime();
+        const diffMs = endMs - startMs;
+        const days = diffMs / (1000 * 60 * 60 * 24);
+
+        if (days <= 7) {
+          interval = 'daily';
+        } else if (days <= 90) { // Approx 3 months
+          interval = 'weekly';
+        } else if (days <= 365 * 3) { // 3 years
+          interval = 'monthly';
+        } else {
+          interval = 'yearly';
+        }
+      }
+    }
+
+    // Ensure we have values (Typescript guard, though logic above covers all paths)
+    interval = interval || 'weekly';
+
+    // Now resolve dates with our calculated defaults
     const { startIso: startDateIso, endIso: endDateIso } =
-      this.resolveTimeRange(args.startDate, args.endDate, 'now-30d', 'now');
+      this.resolveTimeRange(startDate, endDate);
 
     this.logger.info('Getting visit trends', {
       interval,
