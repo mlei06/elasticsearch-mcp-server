@@ -1,10 +1,10 @@
 export type VisualizationType = 'line' | 'bar' | 'pie' | 'table' | 'metric' | 'json';
 
 export interface StandardResponse<T> {
+    data: T;
     meta: {
         tool: string;
         description: string;
-        arguments: Record<string, any>;
         time: {
             start: string;
             end: string;
@@ -20,5 +20,4 @@ export interface StandardResponse<T> {
             yAxisLabel?: string;
         };
     };
-    data: T;
 }

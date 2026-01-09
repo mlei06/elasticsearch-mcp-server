@@ -35,16 +35,20 @@ export type PeriodSummaryResult = StandardResponse<{
 
 export class PeriodSummaryTool extends BaseTool<typeof PeriodSummaryArgsSchema, PeriodSummaryResult> {
   constructor(elasticsearch: any, logger: any) {
-    super(elasticsearch, logger, 'get-subscription-breakdown');
+    super(elasticsearch, logger, 'elastic_period_summary');
   }
 
   get schema() {
     return PeriodSummaryArgsSchema;
   }
 
+  get description() {
+    return 'Compare subscription tiers (Enterprise, Premium, FVC, BVC, Plus) across a time period. Always returns metrics grouped by subscription tier with per-tier breakdown (visits, accounts, providers, patients, ratings, call duration) plus totals.';
+  }
+
   protected async run(args: PeriodSummaryArgs): Promise<PeriodSummaryResult> {
     const { startIso: startDateIso, endIso: endDateIso } =
-      this.resolveTimeRange(args.startDate, args.endDate, 'now-30d', 'now');
+      this.resolveTimeRange(args.startDate, args.endDate, 'now-14d', 'now');
 
     this.logger.info('Getting subscription breakdown', {
       startDate: startDateIso,
@@ -185,7 +189,7 @@ export class PeriodSummaryTool extends BaseTool<typeof PeriodSummaryArgsSchema, 
       total_unique_patients: totalUniquePatients
     }, {
       description: `Subscription breakdown from ${startDateIso} to ${endDateIso}`,
-      arguments: args,
+
       time: {
         start: startDateIso,
         end: endDateIso

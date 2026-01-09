@@ -37,17 +37,21 @@ export type UsageProfileResult = StandardResponse<UsageProfileItem[]>;
 
 export class GetUsageProfileTool extends BaseTool<typeof GetUsageProfileArgsSchema, UsageProfileResult> {
   constructor(elasticsearch: any, logger: any) {
-    super(elasticsearch, logger, 'get-usage-profile');
+    super(elasticsearch, logger, 'elastic_get_usage_profile');
   }
 
   get schema() {
     return GetUsageProfileArgsSchema;
   }
 
+  get description() {
+    return 'Get a comprehensive usage profile for a specific scope (global, or a specific account/group). Includes deep breakdowns like platform distribution (Web vs iOS) and subscription tiers. Best for exploring HOW a specific context is using the system.';
+  }
+
   protected async run(args: GetUsageProfileArgs): Promise<UsageProfileResult> {
     const groupBy = args.groupBy || 'none';
     const { startIso: startDateIso, endIso: endDateIso } =
-      this.resolveTimeRange(args.startDate, args.endDate, 'now-30d', 'now');
+      this.resolveTimeRange(args.startDate, args.endDate, 'now-2w', 'now');
 
     this.logger.info('Executing usage profile', {
       startDate: startDateIso,
@@ -260,7 +264,7 @@ export class GetUsageProfileTool extends BaseTool<typeof GetUsageProfileArgsSche
 
     return this.buildResponse(summary, {
       description: `Usage profile from ${startDateIso} to ${endDateIso}${groupBy !== 'none' ? ` grouped by ${groupBy}` : ''}`,
-      arguments: args,
+
       time: {
         start: startDateIso,
         end: endDateIso

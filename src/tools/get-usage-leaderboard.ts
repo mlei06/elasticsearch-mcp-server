@@ -48,18 +48,22 @@ export type GetUsageLeaderboardResult = StandardResponse<EntityUsageMetrics[]>;
 
 export class GetUsageLeaderboardTool extends BaseTool<typeof GetUsageLeaderboardArgsSchema, GetUsageLeaderboardResult> {
     constructor(elasticsearch: any, logger: any) {
-        super(elasticsearch, logger, 'get-usage-leaderboard');
+        super(elasticsearch, logger, 'elastic_get_usage_leaderboard');
     }
 
     get schema() {
         return GetUsageLeaderboardArgsSchema;
     }
 
+    get description() {
+        return 'Generate a ranked leaderboard of accounts, groups, or platforms based on a specific metric (e.g., "top 10 providers by visit count" or "top 5 groups by unique patients"). Best for identifying high-usage entities or outliers. Returns key metrics like visits, unique counts, ratings, and duration.';
+    }
+
     protected async run(args: GetUsageLeaderboardArgs): Promise<GetUsageLeaderboardResult> {
-        const limit = args.limit || 10;
+        const limit = args.limit || 3;
         const orderBy = args.orderBy || 'visit_count';
         const { startIso: startDateIso, endIso: endDateIso } =
-            this.resolveTimeRange(args.startDate, args.endDate, 'now-30d', 'now');
+            this.resolveTimeRange(args.startDate, args.endDate, 'now-2w', 'now');
 
         this.logger.info('Executing usage leaderboard', {
             entityType: args.entityType,
@@ -168,7 +172,7 @@ export class GetUsageLeaderboardTool extends BaseTool<typeof GetUsageLeaderboard
 
         return this.buildResponse(results, {
             description: `${args.mode === 'top_n' ? `Top ${limit}` : 'Specific'} ${args.entityType} by ${orderBy} from ${startDateIso} to ${endDateIso}`,
-            arguments: args,
+
             time: {
                 start: startDateIso,
                 end: endDateIso

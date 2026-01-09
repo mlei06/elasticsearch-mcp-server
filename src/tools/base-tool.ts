@@ -4,11 +4,12 @@ import { Logger } from '../logger.js';
 import { StandardResponse } from './types.js';
 import { resolveDate } from '../utils/date-math.js';
 import { ValidationError, ElasticsearchError } from '../errors/handlers.js';
+import { zodToMcpToolSchema, ToolDefinition } from '../utils/schema-converter.js';
 
 export abstract class BaseTool<TArgs extends z.ZodTypeAny, TResult> {
     protected elasticsearch: ElasticsearchManager;
     protected logger: Logger;
-    protected toolName: string;
+    public readonly toolName: string;
 
     constructor(elasticsearch: ElasticsearchManager, logger: Logger, toolName: string) {
         this.elasticsearch = elasticsearch;
@@ -17,6 +18,15 @@ export abstract class BaseTool<TArgs extends z.ZodTypeAny, TResult> {
     }
 
     abstract get schema(): TArgs;
+    abstract get description(): string;
+
+    get toolDefinition(): ToolDefinition {
+        return {
+            name: this.toolName,
+            description: this.description,
+            inputSchema: zodToMcpToolSchema(this.schema as any),
+        };
+    }
 
     protected abstract run(args: z.output<TArgs>): Promise<TResult>;
 
@@ -74,7 +84,6 @@ export abstract class BaseTool<TArgs extends z.ZodTypeAny, TResult> {
         data: TData,
         meta: {
             description?: string;
-            arguments: Record<string, any>;
             time?: {
                 start: string;
                 end: string;
@@ -97,14 +106,13 @@ export abstract class BaseTool<TArgs extends z.ZodTypeAny, TResult> {
         }
 
         return {
+            data,
             meta: {
                 tool: this.toolName,
                 description: meta.description || `Results from ${this.toolName}`,
-                arguments: meta.arguments,
                 time: meta.time || { start: '', end: '' },
                 visualization: meta.visualization
-            },
-            data
+            }
         };
     }
 }

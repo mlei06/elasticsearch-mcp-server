@@ -6,7 +6,7 @@ import { StandardResponse } from './types.js';
 import { AGGREGATION_LIMITS } from '../utils/aggregation-limits.js';
 
 const GetVisitTrendsArgsSchema = z.object({
-  interval: z.enum(['daily', 'weekly', 'monthly']).default('weekly').describe('Time interval for trends: "daily", "weekly", or "monthly" (default: weekly)'),
+  interval: z.enum(['daily', 'weekly', 'monthly', 'yearly']).default('weekly').describe('Time interval for trends: "daily", "weekly", "monthly", or "yearly" (default: weekly)'),
   startDate: z.string().optional().describe('Start date in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d" (1 month)'),
   endDate: z.string().optional().describe('End date in ISO format (YYYY-MM-DD) or date math (e.g., "now"). Defaults to "now"'),
   groupBy: z.enum(['none', 'subscription', 'account', 'group']).optional().default('none').describe('Optional grouping dimension (default: none)'),
@@ -33,11 +33,15 @@ export type VisitTrendsResult = StandardResponse<TrendDataPoint[] | GroupedTrend
 
 export class GetVisitTrendsTool extends BaseTool<typeof GetVisitTrendsArgsSchema, VisitTrendsResult> {
   constructor(elasticsearch: any, logger: any) {
-    super(elasticsearch, logger, 'get-visit-trends');
+    super(elasticsearch, logger, 'elastic_get_visit_trends');
   }
 
   get schema() {
     return GetVisitTrendsArgsSchema;
+  }
+
+  get description() {
+    return 'Get visit/usage count trends over time (daily, weekly, monthly, or yearly intervals) with optional grouping by subscription, account, or group. Returns time series data points with visit counts and unique counts (accounts, providers, patients) per period.';
   }
 
   protected async run(args: GetVisitTrendsArgs): Promise<VisitTrendsResult> {
@@ -99,6 +103,9 @@ export class GetVisitTrendsTool extends BaseTool<typeof GetVisitTrendsArgsSchema
       case 'monthly':
         calendarInterval = 'month';
         break;
+      case 'yearly':
+        calendarInterval = 'year';
+        break;
       default:
         calendarInterval = 'week';
     }
@@ -109,6 +116,10 @@ export class GetVisitTrendsTool extends BaseTool<typeof GetVisitTrendsArgsSchema
           field: timeField,
           calendar_interval: calendarInterval,
           min_doc_count: 0,
+          extended_bounds: {
+            min: startDateIso,
+            max: endDateIso,
+          },
         },
         aggs: {
           unique_accounts: {
@@ -151,6 +162,10 @@ export class GetVisitTrendsTool extends BaseTool<typeof GetVisitTrendsArgsSchema
               field: timeField,
               calendar_interval: calendarInterval,
               min_doc_count: 0,
+              extended_bounds: {
+                min: startDateIso,
+                max: endDateIso,
+              },
             },
             aggs: {
               unique_accounts: {
@@ -236,7 +251,7 @@ export class GetVisitTrendsTool extends BaseTool<typeof GetVisitTrendsArgsSchema
 
     return this.buildResponse(trends, {
       description: `Visit trends (${interval}) from ${startDateIso} to ${endDateIso}${groupBy !== 'none' ? ` grouped by ${groupBy}` : ''}`,
-      arguments: args,
+
       time: {
         start: startDateIso,
         end: endDateIso,

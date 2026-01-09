@@ -8,9 +8,9 @@ import { AGGREGATION_LIMITS, calculateTermsSize } from '../utils/aggregation-lim
 const GetPlatformBreakdownArgsSchema = z.object({
   role: z.enum(['provider', 'patient']).describe('Role: "provider" for provider platforms/versions, "patient" for patient platforms/versions'),
   breakdownType: z.enum(['platform', 'version']).describe('Breakdown type: "platform" for platform breakdown (Web/iOS/Android), "version" for platform version breakdown'),
-  topN: z.number().int().min(1).max(100).optional().default(10).describe('Number of top items to return (default: 10, max: 100)'),
-  startDate: z.string().optional().describe('Start date in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d"'),
-  endDate: z.string().optional().describe('End date in ISO format (YYYY-MM-DD) or date math (e.g., "now"). Defaults to "now"'),
+  topN: z.number().int().min(1).max(100).optional().default(5).describe('Number of top items to return (default: 10, max: 100)'),
+  startDate: z.string().optional().describe('Start date in date math (e.g., "now-30d", "now-1y") or ISO format (YYYY-MM-DD)'),
+  endDate: z.string().optional().describe('End date in date math (e.g., "now") or ISO format (YYYY-MM-DD)'),
   account: z.string().optional().describe('Optional account name to filter data to'),
   group: z.string().optional().describe('Optional group name to filter data to'),
 }).strict();
@@ -38,11 +38,15 @@ export type PlatformBreakdownResult = StandardResponse<{
 
 export class GetPlatformBreakdownTool extends BaseTool<typeof GetPlatformBreakdownArgsSchema, PlatformBreakdownResult> {
   constructor(elasticsearch: any, logger: any) {
-    super(elasticsearch, logger, 'get-platform-breakdown');
+    super(elasticsearch, logger, 'elastic_get_platform_breakdown');
   }
 
   get schema() {
     return GetPlatformBreakdownArgsSchema;
+  }
+
+  get description() {
+    return 'Get breakdown of top N platforms or platform versions by usage over a time period, can optionally be filtered by account or group. Supports both provider and patient roles.';
   }
 
   protected async run(args: GetPlatformBreakdownArgs): Promise<PlatformBreakdownResult> {
@@ -277,7 +281,7 @@ export class GetPlatformBreakdownTool extends BaseTool<typeof GetPlatformBreakdo
       other_items: otherItems
     }, {
       description: `Platform breakdown by ${args.breakdownType} for ${args.role}s from ${startDateIso} to ${endDateIso}`,
-      arguments: args,
+
       time: {
         start: startDateIso,
         end: endDateIso

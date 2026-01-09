@@ -1,7 +1,7 @@
+import { BaseTool } from './base-tool.js';
+import { z } from 'zod';
 import { ElasticsearchManager } from '../elasticsearch/client.js';
 import { Logger } from '../logger.js';
-import { z } from 'zod';
-import { ValidationError, ElasticsearchError } from '../errors/handlers.js';
 
 const GetIndexFieldsArgsSchema = z.object({
   index: z.string().min(1).default('stats-*').describe('Index name or pattern (supports wildcards like stats-*). Defaults to "stats-*" if not specified. Only specify if you need fields from a different index.'),
@@ -29,80 +29,62 @@ export interface GetIndexFieldsResult {
   total: number;
 }
 
-export class GetIndexFieldsTool {
-  private elasticsearch: ElasticsearchManager;
-  private logger: Logger;
-
+export class GetIndexFieldsTool extends BaseTool<typeof GetIndexFieldsArgsSchema, GetIndexFieldsResult> {
   constructor(elasticsearch: ElasticsearchManager, logger: Logger) {
-    this.elasticsearch = elasticsearch;
-    this.logger = logger.child({ tool: 'get-index-fields' });
+    super(elasticsearch, logger, 'elastic_get_index_fields');
   }
 
-  async execute(args: unknown): Promise<GetIndexFieldsResult> {
-    try {
-      const validatedArgs = GetIndexFieldsArgsSchema.parse(args);
-      
-      const index = validatedArgs.index || 'stats-*';
-      
-      this.logger.info('Getting index fields', {
-        index,
-        fieldFilter: validatedArgs.fieldFilter,
-        typeFilter: validatedArgs.typeFilter,
-        includeNested: validatedArgs.includeNested,
-      });
+  get schema() {
+    return GetIndexFieldsArgsSchema;
+  }
 
-      const client = this.elasticsearch.getClient();
+  get description() {
+    return 'Get all fields from an Elasticsearch index with optional filtering by field name and type. Use this tool when you need to discover available fields, their types, and correct field names before constructing queries. This is especially useful when unsure about field names or when looking for fields with specific types (e.g., keyword fields for exact matches or text fields for full-text search). ⚠️ IMPORTANT: Do NOT specify the index parameter unless the user explicitly requests fields from a different index. The tool defaults to "stats-*" which covers all standard indices.';
+  }
 
-      const response = await client.indices.getMapping({
-        index,
-      });
+  protected async run(args: z.output<typeof GetIndexFieldsArgsSchema>): Promise<GetIndexFieldsResult> {
+    const index = args.index || 'stats-*';
 
-      const fields: FieldInfo[] = [];
-      const fieldFilterLower = validatedArgs.fieldFilter?.toLowerCase();
-      const typeFilterLower = validatedArgs.typeFilter?.toLowerCase();
+    this.logger.info('Getting index fields', {
+      index,
+      fieldFilter: args.fieldFilter,
+      includeNested: args.includeNested,
+    });
 
-      for (const [, indexMapping] of Object.entries(response)) {
-        const properties = indexMapping.mappings?.properties || {};
-        this.extractFields(
-          properties,
-          fields,
-          '',
-          validatedArgs.includeNested ?? true,
-          fieldFilterLower,
-          typeFilterLower
-        );
-      }
+    const client = this.elasticsearch.getClient();
 
-      fields.sort((a, b) => a.path.localeCompare(b.path));
+    const response = await client.indices.getMapping({
+      index,
+    });
 
-      this.logger.info('Successfully retrieved index fields', {
-        index,
-        count: fields.length,
-      });
+    const fields: FieldInfo[] = [];
+    const fieldFilterLower = args.fieldFilter?.toLowerCase();
+    const typeFilterLower = args.typeFilter?.toLowerCase();
 
-      return {
-        index,
+    for (const [, indexMapping] of Object.entries(response)) {
+      const properties = (indexMapping as any).mappings?.properties || {};
+      this.extractFields(
+        properties,
         fields,
-        total: fields.length,
-      };
-    } catch (error) {
-      if (error instanceof Error && error.name === 'ZodError') {
-        throw new ValidationError('Invalid arguments for get_index_fields', {
-          details: error.message,
-        });
-      }
-
-      if (error instanceof ValidationError) {
-        throw error;
-      }
-
-      this.logger.error('Failed to get index fields', {}, error as Error);
-      throw new ElasticsearchError(
-        'Failed to get index fields from Elasticsearch',
-        error as Error,
-        { args }
+        '',
+        args.includeNested ?? true,
+        fieldFilterLower,
+        typeFilterLower
       );
     }
+
+    fields.sort((a, b) => a.path.localeCompare(b.path));
+
+    this.logger.info('Successfully retrieved index fields', {
+      index,
+      count: fields.length,
+    });
+
+    return {
+      index,
+      fields,
+      total: fields.length,
+    };
   }
 
   private extractFields(
@@ -166,4 +148,3 @@ export class GetIndexFieldsTool {
     }
   }
 }
-

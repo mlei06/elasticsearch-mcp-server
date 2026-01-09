@@ -113,11 +113,15 @@ export type FindEntitiesByMetricResult = StandardResponse<{
 
 export class FindEntitiesByMetricTool extends BaseTool<typeof FindEntitiesByMetricArgsSchema, FindEntitiesByMetricResult> {
   constructor(elasticsearch: any, logger: any) {
-    super(elasticsearch, logger, 'find_entities_by_metric');
+    super(elasticsearch, logger, 'elastic_find_entities_by_metric');
   }
 
   get schema() {
     return FindEntitiesByMetricArgsSchema;
+  }
+
+  get description() {
+    return 'Find groups or accounts filtered by metrics. Supports single metric (legacy) or multiple metrics (recommended). Available metrics: account_count (groups only), visit_count, provider_rating, patient_rating, avg_call_duration, unique_providers, unique_patients, provider_rating_count, patient_rating_count. Can filter accounts by group. Returns entities matching ALL criteria with their metric values.';
   }
 
   protected async run(args: FindEntitiesByMetricArgs): Promise<FindEntitiesByMetricResult> {
@@ -421,7 +425,7 @@ export class FindEntitiesByMetricTool extends BaseTool<typeof FindEntitiesByMetr
       results: limitedResults
     }, {
       description: `Found ${limitedResults.length} ${args.entityType}s by metric(s) from ${startDateIso} to ${endDateIso}`,
-      arguments: args,
+
       time: {
         start: startDateIso,
         end: endDateIso

@@ -14,8 +14,8 @@ const TopChangeArgsSchema = z.object({
     'patient_platform_version'
   ]).describe('Group by: "account", "group", "provider_platform", "patient_platform", "provider_platform_version", or "patient_platform_version"'),
   direction: z.enum(['increase', 'decrease']).describe('Direction: "increase" for highest growth, "decrease" for highest decline'),
-  topN: z.number().int().min(1).max(50).default(5).describe('Number of top items to return (default: 5, max: 50)'),
-  startDate: z.string().optional().describe('Start date for current period in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d"'),
+  topN: z.number().int().min(1).max(50).default(1).describe('Number of top items to return (default: 5, max: 50)'),
+  startDate: z.string().optional().describe('Start date for current period in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-1w"'),
   endDate: z.string().optional().describe('End date for current period in ISO format (YYYY-MM-DD) or date math (e.g., "now"). Defaults to "now"'),
   subscription: z.enum(['Enterprise', 'Premium', 'FVC', 'BVC', 'Plus']).optional().describe('Optional subscription tier to filter by'),
 }).strict();
@@ -39,17 +39,21 @@ export type TopChangeResult = StandardResponse<{
 
 export class TopChangeTool extends BaseTool<typeof TopChangeArgsSchema, TopChangeResult> {
   constructor(elasticsearch: any, logger: any) {
-    super(elasticsearch, logger, 'top-change');
+    super(elasticsearch, logger, 'elastic_top_change');
   }
 
   get schema() {
     return TopChangeArgsSchema;
   }
 
+  get description() {
+    return 'Find highest visit/usage increase or decrease in top N items (accounts, groups, platforms). Returns items ranked by change with current period count, previous period count, absolute change, and percentage change. The previous period is automatically calculated to match the duration of the current period, ending where the current period starts. Supports filtering by subscription tier.';
+  }
+
   protected async run(args: TopChangeArgs): Promise<TopChangeResult> {
     const topN = args.topN || 5;
     const { startIso: currentPeriodStartIso, endIso: currentPeriodEndIso } =
-      this.resolveTimeRange(args.startDate, args.endDate, 'now-30d', 'now');
+      this.resolveTimeRange(args.startDate, args.endDate, 'now-1w', 'now');
 
     // Calculate previous period
     const currentStartDate = new Date(currentPeriodStartIso);
@@ -232,7 +236,7 @@ export class TopChangeTool extends BaseTool<typeof TopChangeArgsSchema, TopChang
       direction: args.direction
     }, {
       description: `Top ${items.length} ${args.groupBy}s by ${args.direction} in visits from ${currentPeriodStartIso} to ${currentPeriodEndIso} (vs. previous period)`,
-      arguments: args,
+
       time: {
         start: currentPeriodStartIso,
         end: currentPeriodEndIso,

@@ -8,8 +8,8 @@ import { AGGREGATION_LIMITS } from '../utils/aggregation-limits.js';
 const GetRatingDistributionArgsSchema = z.object({
   ratingType: z.enum(['provider', 'patient', 'both']).describe('Type of rating to analyze: "provider", "patient", or "both"'),
   bucketSize: z.number().int().min(1).max(5).optional().default(1).describe('Rating bucket size (default: 1, e.g., 1 = 1-2, 2-3, 3-4, etc.)'),
-  startDate: z.string().optional().describe('Start date in ISO format (YYYY-MM-DD) or date math (e.g., "now-30d", "now-1y"). Defaults to "now-30d"'),
-  endDate: z.string().optional().describe('End date in ISO format (YYYY-MM-DD) or date math (e.g., "now"). Defaults to "now"'),
+  startDate: z.string().optional().describe('Start date in date math (e.g., "now-30d", "now-1y") or ISO format (YYYY-MM-DD)'),
+  endDate: z.string().optional().describe('End date in date math (e.g., "now") or ISO format (YYYY-MM-DD)'),
   account: z.string().optional().describe('Optional account name to filter by'),
   group: z.string().optional().describe('Optional group name to filter by'),
   subscription: z.enum(['Enterprise', 'Premium', 'FVC', 'BVC', 'Plus']).optional().describe('Optional subscription tier to filter by'),
@@ -45,11 +45,15 @@ export type RatingDistributionResult = StandardResponse<RatingDistributionItem |
 
 export class GetRatingDistributionTool extends BaseTool<typeof GetRatingDistributionArgsSchema, RatingDistributionResult> {
   constructor(elasticsearch: any, logger: any) {
-    super(elasticsearch, logger, 'get-rating-distribution');
+    super(elasticsearch, logger, 'elastic_get_rating_distribution');
   }
 
   get schema() {
     return GetRatingDistributionArgsSchema;
+  }
+
+  get description() {
+    return 'Get rating distribution (histogram) for provider and/or patient ratings over a time period. Returns rating buckets with counts and percentages, plus statistics (average, min, max, total count). Supports grouping by subscription, account, or group for comparative analysis.';
   }
 
   protected async run(args: GetRatingDistributionArgs): Promise<RatingDistributionResult> {
@@ -286,7 +290,7 @@ export class GetRatingDistributionTool extends BaseTool<typeof GetRatingDistribu
 
     return this.buildResponse(distribution, {
       description: `Rating distribution (${args.ratingType}, bucket size ${bucketSize}) from ${startDateIso} to ${endDateIso}`,
-      arguments: args,
+
       time: {
         start: startDateIso,
         end: endDateIso
